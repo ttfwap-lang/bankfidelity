@@ -137,13 +137,13 @@ May report whether a variable is set, but never its value.
 
 Allowed:
 
-    GEMINI_API_KEY is set
+    REDUCTO_API_KEY is set
     PDFREST_API_KEY is missing
     MINDEE_API_KEY is set (46 chars)
 
 Forbidden:
 
-    GEMINI_API_KEY=actual-secret-value
+    REDUCTO_API_KEY=actual-secret-value
 
 May read .env.example. Must not read or modify .env unless explicitly instructed.
 If a variable is missing, update .env.example or docs instead of inventing a value.
@@ -155,11 +155,9 @@ The project uses the following API keys (all optional except DUAL_CORE_PASSPHRAS
 | Key | Backend | Fallback |
 |---|---|---|
 | DUAL_CORE_PASSPHRASE | Encryption (required) | None |
-| GEMINI_API_KEY | AI balance, vision, validation | Manual-only mode |
 | REDUCTO_API_KEY | Default cloud parser (Reducto) | offline_parser |
 | MINDEE_API_KEY | Optional legacy cloud parser (Mindee) | offline_parser |
 | LLAMAPARSE_API_KEY | Alternative cloud parser (LLM) | offline_parser |
-| DOCUMENT_AI_* | Google ML parser | offline_parser |
 | PDFREST_API_KEY | Cloud verification render | Local Pdfium |
 | APPLITOOLS_API_KEY | Visual AI testing | SSIM-only |
 | PYMUPDF_PRO_KEY | Enhanced font handling | PyMuPDF free tier |
@@ -222,13 +220,13 @@ and temporary duct-tape fixes.
 ## Fallback chain rules
 
 Every pipeline stage must have at least one offline fallback:
-- Cloud parsers â†’ offline_parser
-- AI balance â†’ local balance engine
-- Cloud rendering â†’ local Pdfium
-- Visual AI â†’ SSIM-only metrics
-- PyMuPDF edit â†’ Pdfium â†’ Typst reconstruct (ultimate)
+- Cloud parsers -> offline_parser
+- AI balance -> local balance engine
+- Cloud rendering -> local Pdfium
+- Visual AI -> SSIM-only metrics
+- PyMuPDF edit -> Pdfium -> Typst reconstruct (ultimate)
 
-**Exception**: `TransferTransactions` and `RunTransferTests` strictly require an AI provider (Gemini/Groq/OpenRouter) for layout-agnostic format mapping. Their source and target parsing stages fall back to `offline_parser`, but the actual translation mapping has no offline equivalent.
+**Exception**: `TransferTransactions` and `RunTransferTests` strictly require an AI provider (Groq/OpenRouter/Local Qwen) for layout-agnostic format mapping. Their source and target parsing stages fall back to `offline_parser`, but the actual translation mapping has no offline equivalent.
 
 New integrations must follow this pattern and register in ApiAvailability.
 
@@ -245,7 +243,7 @@ At the end of each session, summarize:
 ## Anti-Fragile Orchestration Principles (Learned)
 
 1. **Zero-Brittle Boundaries**: Never use bare except Exception: in Python, especially in JSON parsing or API calls. Always use typed exceptions (json.JSONDecodeError) or exc_info=True. In Rust, never use .unwrap() or .expect() at I/O boundaries (Network, FS, IPC); always propagate Result or use unwrap_or_default().
-2. **Explicit IPC Handoffs**: When BankFidelity (Rust) orchestrates Microsoft UFO (Python), do not rely on UFO's internal status flags alone. Always parse esult.json's output field using strict Regex (e.g., (?i)[a-z]:\\[^<>\x22\|\?\*]+\.pdf) to programmatically intercept artifacts and inject them into the next Pipeline Job (e.g., Job::ExtractTransactions).
+2. **Explicit IPC Handoffs**: When BankFidelity (Rust) orchestrates Microsoft UFO (Python), do not rely on UFO's internal status flags alone. Always parse esult.json's output field using strict Regex (e.g., (?i)[a-z]:\\[^<>\x22\|\?\*]+\.pdf) to programmatically intercept artifacts and inject them into the next Pipeline Job (e.g., Job::ExtractTransactions).
 3. **Smart Retries**: Always wrap agentic subprocess calls (UfoClient::dispatch_task) in a localized retry loop (max 1-2 attempts) to recover from LLM hallucinations before crashing back to the user terminal.
 4. **Absolute Repository Roots in Launchers**: All .bat and .ps1 launchers must define explicit absolute paths (set "BF_DIR=C:\bankfidelity\bankfidelity", set "UFO_ROOT=C:\ufo\ufo") rather than assuming %~dp0.. when placed on Desktop or OneDrive folders.
 5. **Deterministic Python Runtime**: Never invoke bare python in Windows batch scripts or PowerShell tasks. Always invoke %PYTHON_EXE% (C:\ufo\ufo\python_env\python.exe), setting PYTHONIOENCODING=utf-8 and PYTHONPATH=%UFO_ROOT%;%BF_DIR%.
@@ -253,5 +251,7 @@ At the end of each session, summarize:
 7. **Win32 Foreground Focus Switching**: To reliably activate target windows on Windows 10/11, use AllowSetForegroundWindow(-1) and AttachThreadInput with an Alt-key tap before SetForegroundWindow.
 8. **Strict Subsystem Independence**: BankFidelity and Microsoft UFO must always be independently bootable and testable. Never introduce hard compile-time or runtime dependencies that break standalone execution of either component.
 9. **MCP Signature Parity**: Every tool exposed in `src/ai/mcp.rs` must have 100% argument alignment with `src/app/cli.rs`. Always support canonical CLI parameter names alongside common aliases (`from_log` / `input`, `output` / `output_dir`).
-10. **Cloud Primary + Local Offline Fallback**: In UFO agent configs (`agents.yaml`), configure Gemini / Cloud endpoints as primary for multimodal reasoning, while maintaining local Qwen (port 11434) and offline heuristic parsers as zero-cost resilience layers.
+10. **Cloud Primary + Local Offline Fallback**: In UFO agent configs (`agents.yaml`), configure Cloud / Local Qwen endpoints as primary for multimodal reasoning, while maintaining local Qwen (port 11434) and offline heuristic parsers as zero-cost resilience layers.
+11. **Vector Baseline Anchoring Over Generative Guesswork**: For PDF text surgery, never use `insert_textbox` or generative coordinate hallucinations. Always anchor replacement glyphs to the target donor's true vector baseline `span["origin"]` (or calculate baseline via font ascent metrics) and verify alignment using sub-millimeter differential projection profile analysis.
+12. **Omnipotent Specialist Ensemble Architecture**: Stack best-in-class specialist models (Reducto for ingestion, PyMuPDF Pro for vector baseline geometry, Molmo/Florence-2 for sub-pixel coordinate regression, Surya/DeepFont for typographical classification, and native `rust_decimal` for cryptographic double-entry arithmetic) for maximum visual fidelity.
 

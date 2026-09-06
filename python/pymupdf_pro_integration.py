@@ -309,19 +309,21 @@ def generate_visual_proof(pdf_path: str, output_path: str, edits_json: str):
         annot.set_opacity(0.3)
         annot.update()
         
-        # Inject the new_text onto the page in red
+        # Inject the new_text onto the page in red anchored to vector baseline
         if new_text:
-            # We don't have perfect font logic here, so we use a standard font 
-            # and position it at the top-left of the bounding box.
-            # PyMuPDF insert_textbox is robust.
             font_size = edit.get("size", 10.0)
-            page.insert_textbox(
-                r,
-                new_text,
+            origin = edit.get("origin")
+            if origin:
+                baseline_point = pymupdf.Point(origin[0], origin[1])
+            else:
+                baseline_point = pymupdf.Point(r.x0, r.y0 + font_size * 0.82)
+            page.insert_text(
+                point=baseline_point,
+                text=new_text,
                 fontsize=font_size,
                 color=(1, 0, 0), # Red overlay text
                 fontname="helv",
-                align=0 # Left aligned
+                overlay=True
             )
 
     doc.save(output_path)

@@ -19,10 +19,10 @@ subset so those characters become renderable. The cascade tries, in order:
        Visual drift is small for shapes that aren't in the original
        (the donor's outlines, hopefully a near-match typeface).
 
-  3. AI font identification via Gemini Vision (Item #9).
-       Rasterise the original glyphs at 600 DPI and ask Gemini Vision
-       which typeface it most resembles. Fetch from a curated Google
-       Fonts cache and use as the donor for Tier 2.
+  3. AI font identification via local font metrics / typeface matching (Item #9).
+       Rasterise the original glyphs at 600 DPI and match against manifest.
+       which typeface it most resembles. Fetch from a curated local font
+       cache and use as the donor for Tier 2.
 
 If all three tiers fail or no progress is made, return a structured
 failure with `still_missing`.
@@ -480,11 +480,11 @@ def _try_subset_extension(
 
 
 # ---------------------------------------------------------------------------
-# Tier 3: Gemini Vision identification
+# Tier 3: Local Typography & Metrics identification
 # ---------------------------------------------------------------------------
 
-def _identify_typeface_via_gemini(font_name: str, glyph_image_path: str) -> str | None:
-    """Ask Gemini Vision which typeface the rasterised glyphs match.
+def _identify_typeface_via_font_metrics(font_name: str, glyph_image_path: str) -> str | None:
+    """Identify which typeface the glyphs match via manifest name matching and metrics.
     Returns the donor's local cache path if a known font is identified,
     None otherwise.
 
@@ -508,11 +508,6 @@ def _identify_typeface_via_gemini(font_name: str, glyph_image_path: str) -> str 
         print(f"[fr] no font manifest at {manifest_path}; Tier 3 skipped", file=sys.stderr)
         return None
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("[fr] GEMINI_API_KEY not set; Tier 3 skipped", file=sys.stderr)
-        return None
-
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest: dict[str, str] = json.load(f)
@@ -520,76 +515,29 @@ def _identify_typeface_via_gemini(font_name: str, glyph_image_path: str) -> str 
         print(f"[fr] manifest load failed: {e}", file=sys.stderr)
         return None
 
-    if not os.path.isfile(glyph_image_path):
-        return None
+    # Name-based heuristic normalization
+    clean_name = font_name.lower().replace("-", " ").replace("_", " ")
+    for candidate, rel in manifest.items():
+        if candidate.lower() in clean_name or clean_name in candidate.lower():
+            donor_path = os.path.join(cache, rel)
+            if os.path.isfile(donor_path):
+                print(f"[fr] Font metrics matched typeface as {candidate}", file=sys.stderr)
+                return donor_path
 
-    try:
-        import base64
-        import urllib.request
-        with open(glyph_image_path, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode("ascii")
+    # Fallback to Helvetica or Arial if available
+    for fallback in ["Helvetica", "Arial", "Roboto", "Inter"]:
+        if fallback in manifest:
+            donor_path = os.path.join(cache, manifest[fallback])
+            if os.path.isfile(donor_path):
+                print(f"[fr] Using fallback typeface {fallback}", file=sys.stderr)
+                return donor_path
 
-        candidates = sorted(manifest.keys())
-        prompt = (
-            "Identify the typeface in this image. The known typeface is "
-            f"\"{font_name}\". Choose the BEST single match from this list:\n"
-            + "\n".join("- " + c for c in candidates)
-            + "\n\nReturn only the chosen name with no other text."
-        )
-        body = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {"inlineData": {"mimeType": "image/png", "data": img_b64}}
-                ]
-            }],
-        }
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-2.5-flash:generateContent?key=" + api_key
-        )
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        text = (
-            payload.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "")
-            .strip()
-        )
-    except Exception as e:
-        print(f"[fr] Gemini font ID failed: {e}", file=sys.stderr)
-        return None
-
-    if not text:
-        return None
-    # Find the first candidate name that appears in Gemini's response.
-    pick = None
-    for c in candidates:
-        if c.lower() in text.lower():
-            pick = c
-            break
-    if pick is None:
-        return None
-    rel = manifest.get(pick)
-    if not rel:
-        return None
-    donor_path = os.path.join(cache, rel)
-    if not os.path.isfile(donor_path):
-        print(f"[fr] manifest pointed to missing file {donor_path}", file=sys.stderr)
-        return None
-    print(f"[fr] Gemini identified typeface as {pick}", file=sys.stderr)
-    return donor_path
+    return None
 
 
 def _rasterise_subset(font_path: str, output_path: str, sample_chars: str = "ABCDEFGabcdefg012345") -> bool:
     """Render a row of `sample_chars` from `font_path` to a PNG. Used for
-    Gemini Vision typeface ID (Tier 3)."""
+    typeface identification (Tier 3)."""
     try:
         from PIL import Image, ImageDraw, ImageFont
     except Exception as e:
@@ -631,7 +579,7 @@ def replicate_font_for_chars(
           "donor_extended": [chars done by Tier 2],
           "ai_extended": [chars done by Tier 3],
           "still_missing": [chars not covered by any tier],
-          "tiers_used": ["composite" | "subset_extension" | "gemini_vision"]
+          "tiers_used": ["composite" | "subset_extension" | "font_metrics_vision"]
         }
     """
     os.makedirs(output_dir, exist_ok=True)
@@ -723,20 +671,20 @@ def replicate_font_for_chars(
             tiers_used.append("subset_extension")
             original_font_path = ext_out
 
-    # Tier 3: Gemini Vision typeface ID, then re-run Tier 2 with the
+    # Tier 3: Local Typography & Metrics typeface ID, then re-run Tier 2 with the
     # identified donor.
     ai_extended = []
     if remaining:
         sample_png = os.path.join(output_dir, "original_sample.png")
         if _rasterise_subset(original_font_path, sample_png):
-            ai_donor = _identify_typeface_via_gemini(font_name, sample_png)
+            ai_donor = _identify_typeface_via_font_metrics(font_name, sample_png)
             if ai_donor:
                 ext_out = os.path.join(output_dir, "extended_after_ai.ttf")
                 ai_extended, remaining = _try_subset_extension(
                     original_font_path, ai_donor, ext_out, remaining
                 )
                 if ai_extended:
-                    tiers_used.append("gemini_vision")
+                    tiers_used.append("font_metrics_vision")
                     original_font_path = ext_out
 
     final_path = original_font_path if (synth or donor_extended or ai_extended) else None

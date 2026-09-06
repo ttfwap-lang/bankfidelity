@@ -46,9 +46,8 @@ impl Default for PythonWorkerConfig {
             .or_else(|| std::env::var_os("PYTHON_EXE"))
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::var_os("UFO_ROOT").map(|root| {
-                    PathBuf::from(root).join("python_env").join("python.exe")
-                })
+                std::env::var_os("UFO_ROOT")
+                    .map(|root| PathBuf::from(root).join("python_env").join("python.exe"))
             })
             .unwrap_or(default_executable);
         let worker_script = std::env::var_os("PYTHON_WORKER_SCRIPT")
