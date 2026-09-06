@@ -1,8 +1,12 @@
 use crate::app::config::AppConfig;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::fs;
+use tokio::sync::Mutex;
 
 const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
 
@@ -113,6 +117,7 @@ struct ReductoResult {
 pub struct ReductoClient {
     raw_http: reqwest::Client,
     api_key: String,
+    upload_cache: Arc<Mutex<HashMap<PathBuf, (String, SystemTime)>>>,
 }
 
 impl ReductoClient {
@@ -127,10 +132,97 @@ impl ReductoClient {
             .build()
             .unwrap_or_default();
 
-        Ok(Self { raw_http, api_key })
+        let upload_cache = Arc::new(Mutex::new(HashMap::new()));
+
+        Ok(Self {
+            raw_http,
+            api_key,
+            upload_cache,
+        })
     }
 
+    /// Internal JSON POST helper with exponential backoff on 429/503 rate limits
+    async fn post_json_with_retry<Req: Serialize, Resp: serde::de::DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        payload: &Req,
+    ) -> Result<Resp, ReductoError> {
+        let max_retries = 2usize;
+        let mut delay = std::time::Duration::from_millis(500);
+
+        for attempt in 0..=max_retries {
+            let res = self
+                .raw_http
+                .post(format!("{}{}", REDUCTO_API_BASE, endpoint))
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(payload)
+                .send()
+                .await;
+
+            match res {
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        return Ok(r.json().await?);
+                    }
+                    if (status == StatusCode::TOO_MANY_REQUESTS
+                        || status == StatusCode::SERVICE_UNAVAILABLE)
+                        && attempt < max_retries
+                    {
+                        tracing::warn!(
+                            "[reducto] HTTP {} on {}. Retrying in {:?} (attempt {}/{})",
+                            status,
+                            endpoint,
+                            delay,
+                            attempt + 1,
+                            max_retries
+                        );
+                        tokio::time::sleep(delay).await;
+                        delay *= 2;
+                        continue;
+                    }
+                    let body = r.text().await.unwrap_or_default();
+                    return Err(ReductoError::Api(status, body));
+                }
+                Err(e) => {
+                    if attempt < max_retries {
+                        tracing::warn!(
+                            "[reducto] Network error on {}: {}. Retrying in {:?} (attempt {}/{})",
+                            endpoint,
+                            e,
+                            delay,
+                            attempt + 1,
+                            max_retries
+                        );
+                        tokio::time::sleep(delay).await;
+                        delay *= 2;
+                        continue;
+                    }
+                    return Err(ReductoError::Network(e));
+                }
+            }
+        }
+        Err(ReductoError::System(format!(
+            "Retries exhausted for {}",
+            endpoint
+        )))
+    }
+
+    /// Upload document to Reducto with file modification cache and automatic retries
     pub async fn upload_document(&self, pdf_path: &Path) -> Result<String, ReductoError> {
+        let mtime = fs::metadata(pdf_path).await.and_then(|m| m.modified()).ok();
+
+        if let Some(mtime) = mtime {
+            let cache = self.upload_cache.lock().await;
+            if let Some((file_id, cached_mtime)) = cache.get(pdf_path) {
+                if *cached_mtime == mtime {
+                    tracing::debug!("[reducto] Reusing cached upload file_id for {:?}", pdf_path);
+                    return Ok(file_id.clone());
+                }
+            }
+        }
+
         let file_bytes = fs::read(pdf_path).await?;
         let file_name = pdf_path
             .file_name()
@@ -138,27 +230,73 @@ impl ReductoClient {
             .to_string_lossy()
             .to_string();
 
-        let part = reqwest::multipart::Part::bytes(file_bytes)
-            .file_name(file_name.clone())
-            .mime_str("application/pdf")
-            .map_err(|e| ReductoError::System(format!("Invalid mime: {}", e)))?;
+        let max_retries = 2usize;
+        let mut delay = std::time::Duration::from_millis(500);
+        let mut last_err = None;
 
-        let form = reqwest::multipart::Form::new().part("file", part);
+        for attempt in 0..=max_retries {
+            let part = reqwest::multipart::Part::bytes(file_bytes.clone())
+                .file_name(file_name.clone())
+                .mime_str("application/pdf")
+                .map_err(|e| ReductoError::System(format!("Invalid mime: {}", e)))?;
 
-        let res = self
-            .raw_http
-            .post(format!("{}/upload", REDUCTO_API_BASE))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .multipart(form)
-            .send()
-            .await?;
+            let form = reqwest::multipart::Form::new().part("file", part);
 
-        if !res.status().is_success() {
-            return Err(ReductoError::Api(res.status(), res.text().await?));
+            match self
+                .raw_http
+                .post(format!("{}/upload", REDUCTO_API_BASE))
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .multipart(form)
+                .send()
+                .await
+            {
+                Ok(res) => {
+                    let status = res.status();
+                    if status.is_success() {
+                        let body: UploadResponse = res.json().await?;
+                        if let Some(mtime) = mtime {
+                            let mut cache = self.upload_cache.lock().await;
+                            cache.insert(pdf_path.to_path_buf(), (body.file_id.clone(), mtime));
+                        }
+                        return Ok(body.file_id);
+                    }
+                    if (status == StatusCode::TOO_MANY_REQUESTS
+                        || status == StatusCode::SERVICE_UNAVAILABLE)
+                        && attempt < max_retries
+                    {
+                        tracing::warn!(
+                            "[reducto] Upload HTTP {} received. Retrying in {:?} (attempt {}/{})",
+                            status,
+                            delay,
+                            attempt + 1,
+                            max_retries
+                        );
+                        tokio::time::sleep(delay).await;
+                        delay *= 2;
+                        continue;
+                    }
+                    let body = res.text().await.unwrap_or_default();
+                    return Err(ReductoError::Api(status, body));
+                }
+                Err(e) => {
+                    if attempt < max_retries {
+                        tracing::warn!(
+                            "[reducto] Upload network error: {}. Retrying in {:?} (attempt {}/{})",
+                            e,
+                            delay,
+                            attempt + 1,
+                            max_retries
+                        );
+                        tokio::time::sleep(delay).await;
+                        delay *= 2;
+                        continue;
+                    }
+                    last_err = Some(ReductoError::Network(e));
+                }
+            }
         }
 
-        let body: UploadResponse = res.json().await?;
-        Ok(body.file_id)
+        Err(last_err.unwrap_or_else(|| ReductoError::System("Upload retries exhausted".into())))
     }
 
     /// Convert documents into structured text, tables, and figures with layout-aware chunking
@@ -182,20 +320,7 @@ impl ReductoClient {
             }),
         };
 
-        let res = self
-            .raw_http
-            .post(format!("{}/parse", REDUCTO_API_BASE))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&req)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
-            return Err(ReductoError::Api(res.status(), res.text().await?));
-        }
-
-        let parse_res: ReductoResponse = res.json().await?;
+        let parse_res: ReductoResponse = self.post_json_with_retry("/parse", &req).await?;
 
         let chunks = if parse_res.result.res_type == "url" {
             let url = parse_res.result.url.unwrap_or_default();
@@ -221,20 +346,8 @@ impl ReductoClient {
             instructions: ExtractInstructions { schema },
         };
 
-        let res = self
-            .raw_http
-            .post(format!("{}/extract", REDUCTO_API_BASE))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&req)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
-            return Err(ReductoError::Api(res.status(), res.text().await?));
-        }
-
-        let extract_res: ReductoExtractResponse = res.json().await?;
+        let extract_res: ReductoExtractResponse =
+            self.post_json_with_retry("/extract", &req).await?;
         if extract_res.result.is_empty() {
             return Ok(serde_json::Value::Null);
         }
@@ -254,20 +367,7 @@ impl ReductoClient {
             split_description: split_description.to_string(),
         };
 
-        let res = self
-            .raw_http
-            .post(format!("{}/split", REDUCTO_API_BASE))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&req)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
-            return Err(ReductoError::Api(res.status(), res.text().await?));
-        }
-
-        let split_res: ReductoResponse = res.json().await?;
+        let split_res: ReductoResponse = self.post_json_with_retry("/split", &req).await?;
         Ok(split_res.result.sections.unwrap_or(serde_json::Value::Null))
     }
 
@@ -284,20 +384,7 @@ impl ReductoClient {
             classification_schema: ClassifySchema { categories },
         };
 
-        let res = self
-            .raw_http
-            .post(format!("{}/classify", REDUCTO_API_BASE))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&req)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
-            return Err(ReductoError::Api(res.status(), res.text().await?));
-        }
-
-        let classify_res: ReductoResponse = res.json().await?;
+        let classify_res: ReductoResponse = self.post_json_with_retry("/classify", &req).await?;
         Ok(classify_res.result.classification.unwrap_or_default())
     }
 
@@ -396,7 +483,7 @@ impl ReductoClient {
                     running_balance,
                     bbox: None,
                     field_bboxes: crate::engine::model::FieldBboxes::default(),
-                    provenance: crate::engine::model::Provenance::DocumentAI { confidence: 1.0 },
+                    provenance: crate::engine::model::Provenance::Reducto { confidence: 1.0 },
                     category: None,
                     canonical: Default::default(),
                 });
@@ -415,30 +502,56 @@ impl ReductoClient {
         Ok(stmt)
     }
 
+    /// Parse a statement PDF into a canonical BankStatement using Reducto.
+    /// Prefers structured /extract, then falls back to parsing /parse markdown tables.
     pub async fn parse_statement(
         &self,
         pdf_path: &Path,
     ) -> Result<crate::ai::document_ai::BankStatement, ReductoError> {
-        if let Ok(stmt) = self.extract_statement_transactions(pdf_path).await {
-            if !stmt.transactions.is_empty() {
+        // 1. Direct structured extraction via POST /extract
+        match self.extract_statement_transactions(pdf_path).await {
+            Ok(stmt) if !stmt.transactions.is_empty() => {
+                tracing::info!(
+                    "[reducto] Successfully extracted {} transactions via structured /extract",
+                    stmt.transactions.len()
+                );
                 return Ok(stmt);
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    "[reducto] Structured /extract returned 0 transactions, falling back to /parse markdown"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[reducto] Structured /extract failed: {}, falling back to /parse markdown",
+                    e
+                );
             }
         }
 
+        // 2. Parse full document chunks/tables and convert markdown tables directly
         let chunks = self.parse_document(pdf_path).await?;
         let markdown = chunks.to_string();
 
-        let client = crate::ai::llamaparse::LlamaParseClient::from_app_config(
-            &crate::app::config::AppConfig::default(),
-        )
-        .map_err(|e| ReductoError::System(e.to_string()))?;
-        let mut statement = client
-            .parse_markdown_to_statement(&markdown)
-            .map_err(|e| ReductoError::System(e.to_string()))?;
+        let mut statement = crate::ai::llamaparse::parse_markdown_to_statement_inner(&markdown)
+            .map_err(|e| ReductoError::System(format!("Reducto markdown parsing failed: {e}")))?;
+
+        for tx in &mut statement.transactions {
+            tx.provenance = crate::engine::model::Provenance::Reducto { confidence: 0.95 };
+        }
         statement.ensure_canonical_metadata();
+
+        if statement.transactions.is_empty() {
+            return Err(ReductoError::System(
+                "Reducto extraction produced 0 transactions".into(),
+            ));
+        }
+
         Ok(statement)
     }
 
+    /// Transfer-optimized parser alias ensuring high-fidelity extraction
     pub async fn parse_statement_for_transfer(
         &self,
         pdf_path: &Path,
@@ -446,6 +559,7 @@ impl ReductoClient {
         self.parse_statement(pdf_path).await
     }
 
+    /// Natural-language guided document editing using Reducto's POST /edit
     pub async fn edit_document(
         &self,
         pdf_path: &Path,
@@ -464,20 +578,7 @@ impl ReductoClient {
             edit_instructions: edit_instructions.to_string(),
         };
 
-        let res = self
-            .raw_http
-            .post(format!("{}/edit", "https://platform.reducto.ai"))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&req)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
-            return Err(ReductoError::Api(res.status(), res.text().await?));
-        }
-
-        let edit_res: ReductoResponse = res.json().await?;
+        let edit_res: ReductoResponse = self.post_json_with_retry("/edit", &req).await?;
         Ok(edit_res.result.chunks.unwrap_or(serde_json::Value::Null))
     }
 }

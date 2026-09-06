@@ -3688,9 +3688,10 @@ Additional Context:\n{context}",
 
                             // 1. Primary: High-Precision Local Differential Geometric Verifier (Zero-Gemini)
                             let py_cfg = crate::ai::python_worker::PythonWorkerConfig::default();
-                            let verifier_script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                                .join("python")
-                                .join("spatial_verifier.py");
+                            let verifier_script =
+                                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                                    .join("python")
+                                    .join("spatial_verifier.py");
 
                             let mut local_approved = false;
                             let mut nudges_to_apply = Vec::new();
@@ -3711,19 +3712,49 @@ Additional Context:\n{context}",
                                     }
                                     if let Ok(output) = c.wait_with_output() {
                                         if output.status.success() {
-                                            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                                                let app = val.get("approved").and_then(|v| v.as_bool()).unwrap_or(true);
-                                                let drift = val.get("max_drift_pt").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                            if let Ok(val) =
+                                                serde_json::from_slice::<serde_json::Value>(
+                                                    &output.stdout,
+                                                )
+                                            {
+                                                let app = val
+                                                    .get("approved")
+                                                    .and_then(|v| v.as_bool())
+                                                    .unwrap_or(true);
+                                                let drift = val
+                                                    .get("max_drift_pt")
+                                                    .and_then(|v| v.as_f64())
+                                                    .unwrap_or(0.0);
                                                 if app {
                                                     tracing::info!("[TRANSFER] Local Differential Verifier approved proof (max drift: {:.3} pt).", drift);
                                                     local_approved = true;
-                                                } else if let Some(nudges_arr) = val.get("nudges").and_then(|v| v.as_array()) {
+                                                } else if let Some(nudges_arr) =
+                                                    val.get("nudges").and_then(|v| v.as_array())
+                                                {
                                                     tracing::warn!("[TRANSFER] Local Differential Verifier detected drift ({:.3} pt), nudging {} items", drift, nudges_arr.len());
                                                     for n in nudges_arr {
-                                                        let idx = n.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                                                        let dx = n.get("dx").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                                        let dy = n.get("dy").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                                        nudges_to_apply.push(crate::ai::gemini_client::Nudge { index: idx, dx, dy });
+                                                        let idx = n
+                                                            .get("index")
+                                                            .and_then(|v| v.as_u64())
+                                                            .unwrap_or(0)
+                                                            as usize;
+                                                        let dx = n
+                                                            .get("dx")
+                                                            .and_then(|v| v.as_f64())
+                                                            .unwrap_or(0.0)
+                                                            as f32;
+                                                        let dy = n
+                                                            .get("dy")
+                                                            .and_then(|v| v.as_f64())
+                                                            .unwrap_or(0.0)
+                                                            as f32;
+                                                        nudges_to_apply.push(
+                                                            crate::ai::gemini_client::Nudge {
+                                                                index: idx,
+                                                                dx,
+                                                                dy,
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
@@ -3743,19 +3774,25 @@ Additional Context:\n{context}",
                                 }
                                 for nudge in nudges_to_apply {
                                     if nudge.index < batch_edits.len() {
-                                        if let Some(rect) = batch_edits[nudge.index]["rect"].as_array_mut() {
+                                        if let Some(rect) =
+                                            batch_edits[nudge.index]["rect"].as_array_mut()
+                                        {
                                             if rect.len() == 4 {
                                                 if let Some(y0) = rect[1].as_f64() {
-                                                    rect[1] = serde_json::json!(y0 + (nudge.dy as f64));
+                                                    rect[1] =
+                                                        serde_json::json!(y0 + (nudge.dy as f64));
                                                 }
                                                 if let Some(y1) = rect[3].as_f64() {
-                                                    rect[3] = serde_json::json!(y1 + (nudge.dy as f64));
+                                                    rect[3] =
+                                                        serde_json::json!(y1 + (nudge.dy as f64));
                                                 }
                                                 if let Some(x0) = rect[0].as_f64() {
-                                                    rect[0] = serde_json::json!(x0 + (nudge.dx as f64));
+                                                    rect[0] =
+                                                        serde_json::json!(x0 + (nudge.dx as f64));
                                                 }
                                                 if let Some(x1) = rect[2].as_f64() {
-                                                    rect[2] = serde_json::json!(x1 + (nudge.dx as f64));
+                                                    rect[2] =
+                                                        serde_json::json!(x1 + (nudge.dx as f64));
                                                 }
                                             }
                                         }
@@ -4486,7 +4523,9 @@ Additional Context:\n{context}",
                             true
                         }
                         Err(err) => {
-                            tracing::warn!("[TRANSFER] Stage 8: Double-entry ledger warning: {err}");
+                            tracing::warn!(
+                                "[TRANSFER] Stage 8: Double-entry ledger warning: {err}"
+                            );
                             true
                         }
                     };
@@ -5220,14 +5259,12 @@ Additional Context:\n{context}",
                             }
                         } else {
                             let _ = res_tx.send(JobResult::Progress {
-                                label: "Sending to Gemini for complex edit…".into(),
+                                label: "Processing AI natural language edit…".into(),
                                 fraction: 0.4,
                             });
-                            let gemini =
-                                match crate::ai::gemini_client::GeminiClient::from_app_config_async(
-                                    &cfg,
-                                )
-                                .await
+                            let ai_backend =
+                                match crate::ai::backend::AiBackend::from_app_config_async(&cfg)
+                                    .await
                                 {
                                     Ok(c) => c,
                                     Err(e) => {
@@ -5238,7 +5275,10 @@ Additional Context:\n{context}",
                                         return;
                                     }
                                 };
-                            match gemini.apply_natural_language_edit(&instruction, &txs).await {
+                            match ai_backend
+                                .apply_natural_language_edit(&instruction, &txs)
+                                .await
+                            {
                                 Ok(updated) => {
                                     let _ = res_tx.send(JobResult::Progress {
                                         label: "AI edit ready — awaiting confirmation".into(),
@@ -5294,16 +5334,19 @@ Additional Context:\n{context}",
                     fraction: 0.0,
                 });
 
+                let reducto_opt = crate::ai::reducto::ReductoClient::from_app_config(&cfg)
+                    .ok()
+                    .map(std::sync::Arc::new);
                 let doc_ai_opt = crate::ai::document_ai::DocumentAiClient::from_app_config(&cfg)
                     .ok()
                     .map(std::sync::Arc::new);
-                let gemini = match crate::ai::backend::AiBackend::from_app_config(&cfg) {
+                let ai_backend = match crate::ai::backend::AiBackend::from_app_config(&cfg) {
                     Ok(c) => std::sync::Arc::new(c),
                     Err(_) => {
                         let _ = res_tx.send(JobResult::Error {
-                                        job_label: "transfer_tests".into(),
-                                        message: "Transfer tests require an AI provider for format mapping — set GEMINI_API_KEY (or GROQ_API_KEY / OPENROUTER_API_KEY) and select a provider in Backend Preferences.".into(),
-                                    });
+                            job_label: "transfer_tests".into(),
+                            message: "Transfer tests require an AI provider for format mapping — set GROQ_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY and select a provider in Backend Preferences.".into(),
+                        });
                         return;
                     }
                 };
@@ -5331,130 +5374,78 @@ Additional Context:\n{context}",
                         fraction: pair_idx as f32 / total_pairs as f32,
                     });
 
-                    // Parse both statements — DocAI with offline fallback
-                    let source_stmt = if let Some(ref doc_ai) = doc_ai_opt {
-                        match doc_ai.parse_entire_statement(source, None::<&str>).await {
-                            Ok(s) => s,
-                            Err(_e) => {
-                                // DocAI failed, try offline
-                                let eng_clone = engine_for_tokio.clone();
-                                let src_clone = source.clone();
-                                match tokio::task::spawn_blocking(move || {
-                                    crate::engine::offline_parser::parse_statement_offline(
-                                        &src_clone, eng_clone,
-                                    )
-                                })
-                                .await
-                                {
-                                    Ok(Ok(s)) => s,
-                                    _ => {
-                                        corrections.push(
-                                            "Source parse failed (DocAI + offline)".to_string(),
-                                        );
-                                        results.push(TransferTestResult {
-                                            source: source.clone(),
-                                            target: target.clone(),
-                                            output: output.clone(),
-                                            iterations: 0,
-                                            final_math_ok: false,
-                                            final_visual_score: 1.0,
-                                            corrections,
-                                            duration_secs: pair_started.elapsed().as_secs_f64(),
-                                            converged: false,
-                                        });
-                                        continue;
+                    // Parse statements via Reducto -> DocAI -> Offline fallback chain
+                    let parse_statement_resilient = |pdf_path: &std::path::PathBuf| {
+                        let reducto_opt = reducto_opt.clone();
+                        let doc_ai_opt = doc_ai_opt.clone();
+                        let engine = engine_for_tokio.clone();
+                        let p = pdf_path.clone();
+                        async move {
+                            if let Some(ref reducto) = reducto_opt {
+                                if let Ok(stmt) = reducto.parse_statement(&p).await {
+                                    if !stmt.transactions.is_empty() {
+                                        return Ok(stmt);
                                     }
                                 }
                             }
-                        }
-                    } else {
-                        let eng_clone = engine_for_tokio.clone();
-                        let src_clone = source.clone();
-                        match tokio::task::spawn_blocking(move || {
-                            crate::engine::offline_parser::parse_statement_offline(
-                                &src_clone, eng_clone,
-                            )
-                        })
-                        .await
-                        {
-                            Ok(Ok(s)) => s,
-                            _ => {
-                                corrections.push("Source parse failed (offline)".to_string());
-                                results.push(TransferTestResult {
-                                    source: source.clone(),
-                                    target: target.clone(),
-                                    output: output.clone(),
-                                    iterations: 0,
-                                    final_math_ok: false,
-                                    final_visual_score: 1.0,
-                                    corrections,
-                                    duration_secs: pair_started.elapsed().as_secs_f64(),
-                                    converged: false,
-                                });
-                                continue;
+                            if let Some(ref doc_ai) = doc_ai_opt {
+                                if let Ok(stmt) =
+                                    doc_ai.parse_entire_statement(&p, None::<&str>).await
+                                {
+                                    if !stmt.transactions.is_empty() {
+                                        return Ok(stmt);
+                                    }
+                                }
                             }
+                            let eng_clone = engine.clone();
+                            let path_clone = p.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::engine::offline_parser::parse_statement_offline(
+                                    &path_clone,
+                                    eng_clone,
+                                )
+                            })
+                            .await
+                            .map_err(|e| format!("Task spawn error: {e}"))?
+                            .map_err(|e| format!("Offline parse failed: {e}"))
                         }
                     };
-                    let target_stmt = if let Some(ref doc_ai) = doc_ai_opt {
-                        match doc_ai.parse_entire_statement(target, None::<&str>).await {
-                            Ok(s) => s,
-                            Err(_e) => {
-                                let eng_clone = engine_for_tokio.clone();
-                                let tgt_clone = target.clone();
-                                match tokio::task::spawn_blocking(move || {
-                                    crate::engine::offline_parser::parse_statement_offline(
-                                        &tgt_clone, eng_clone,
-                                    )
-                                })
-                                .await
-                                {
-                                    Ok(Ok(s)) => s,
-                                    _ => {
-                                        corrections.push(
-                                            "Target parse failed (DocAI + offline)".to_string(),
-                                        );
-                                        results.push(TransferTestResult {
-                                            source: source.clone(),
-                                            target: target.clone(),
-                                            output: output.clone(),
-                                            iterations: 0,
-                                            final_math_ok: false,
-                                            final_visual_score: 1.0,
-                                            corrections,
-                                            duration_secs: pair_started.elapsed().as_secs_f64(),
-                                            converged: false,
-                                        });
-                                        continue;
-                                    }
-                                }
-                            }
+
+                    let source_stmt = match parse_statement_resilient(source).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            corrections.push(format!("Source parse failed: {e}"));
+                            results.push(TransferTestResult {
+                                source: source.clone(),
+                                target: target.clone(),
+                                output: output.clone(),
+                                iterations: 0,
+                                final_math_ok: false,
+                                final_visual_score: 1.0,
+                                corrections,
+                                duration_secs: pair_started.elapsed().as_secs_f64(),
+                                converged: false,
+                            });
+                            continue;
                         }
-                    } else {
-                        let eng_clone = engine_for_tokio.clone();
-                        let tgt_clone = target.clone();
-                        match tokio::task::spawn_blocking(move || {
-                            crate::engine::offline_parser::parse_statement_offline(
-                                &tgt_clone, eng_clone,
-                            )
-                        })
-                        .await
-                        {
-                            Ok(Ok(s)) => s,
-                            _ => {
-                                corrections.push("Target parse failed (offline)".to_string());
-                                results.push(TransferTestResult {
-                                    source: source.clone(),
-                                    target: target.clone(),
-                                    output: output.clone(),
-                                    iterations: 0,
-                                    final_math_ok: false,
-                                    final_visual_score: 1.0,
-                                    corrections,
-                                    duration_secs: pair_started.elapsed().as_secs_f64(),
-                                    converged: false,
-                                });
-                                continue;
-                            }
+                    };
+
+                    let target_stmt = match parse_statement_resilient(target).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            corrections.push(format!("Target parse failed: {e}"));
+                            results.push(TransferTestResult {
+                                source: source.clone(),
+                                target: target.clone(),
+                                output: output.clone(),
+                                iterations: 0,
+                                final_math_ok: false,
+                                final_visual_score: 1.0,
+                                corrections,
+                                duration_secs: pair_started.elapsed().as_secs_f64(),
+                                converged: false,
+                            });
+                            continue;
                         }
                     };
 
@@ -5463,7 +5454,7 @@ Additional Context:\n{context}",
                         iterations += 1;
 
                         // Get transfer plan
-                        let plan = match gemini
+                        let plan = match ai_backend
                             .plan_transaction_transfer(
                                 &source_stmt.transactions,
                                 &target_stmt.transactions,
@@ -5540,13 +5531,10 @@ Additional Context:\n{context}",
                             Err(e) => math_err_msg = Some(format!("Balance engine error: {e}")),
                         }
 
-                        // Verify math with Gemini
-                        let gemini_math_ok = gemini
-                            .verify_transfer_math(&mapped, opening)
-                            .await
-                            .unwrap_or_default();
-
-                        let math_ok = math_err_msg.is_none() && gemini_math_ok;
+                        // Native Decimal arithmetic verification (Zero-Gemini Lean Architecture)
+                        let local_math_verify =
+                            crate::engine::transfer::verify_mapped_balances(opening, &mapped);
+                        let math_ok = math_err_msg.is_none() && local_math_verify.is_ok();
                         final_math_ok = math_ok;
                         final_visual_score = 0.0; // would need render for real score
 
@@ -5557,13 +5545,13 @@ Additional Context:\n{context}",
                             if let Some(msg) = &math_err_msg {
                                 errors.push(msg.clone());
                             }
-                            if !gemini_math_ok {
-                                errors.push("Gemini math verification failed.".to_string());
+                            if let Err(msg) = &local_math_verify {
+                                errors.push(format!("Balance verification error: {msg}"));
                             }
                             let hint = format!(
-                                            "Your previous mapping failed validation. Errors: {}. Please adjust the mapping to fix these issues.",
-                                            errors.join("; ")
-                                        );
+                                "Your previous mapping failed validation. Errors: {}. Please adjust the mapping to fix these issues.",
+                                errors.join("; ")
+                            );
                             corrections.push(format!(
                                 "Iter {iterations}: math verification failed ({}), retrying",
                                 errors.join("; ")
@@ -6221,20 +6209,19 @@ Additional Context:\n{context}",
                     fraction: 0.2,
                 });
 
-                let gemini =
-                    match crate::ai::gemini_client::GeminiClient::from_app_config_async(&cfg).await
-                    {
+                let ai_backend =
+                    match crate::ai::backend::AiBackend::from_app_config_async(&cfg).await {
                         Ok(c) => c,
                         Err(e) => {
                             let _ = res_tx.send(JobResult::Error {
                                 job_label: "NaturalLanguageEdit".into(),
-                                message: format!("Gemini configuration error: {e}"),
+                                message: format!("AI provider unavailable: {e}"),
                             });
                             return;
                         }
                     };
 
-                match gemini
+                match ai_backend
                     .apply_natural_language_edit(&prompt, &transactions)
                     .await
                 {
