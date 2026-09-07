@@ -288,6 +288,26 @@ pub enum Commands {
         #[arg(long, default_value_t = 10)]
         max_iterations: u32,
     },
+
+    /// Run the 24/7 Guardian & Self-Healing Watchdog Daemon
+    #[command(name = "daemon")]
+    Daemon {
+        /// Enable continuous Win32 desktop and window hang inspection
+        #[arg(long, default_value_t = true)]
+        watchdog: bool,
+
+        /// Enable continuous bank statement template studying into SQLite
+        #[arg(long, default_value_t = true)]
+        template_study: bool,
+
+        /// Heartbeat cycle interval in seconds
+        #[arg(short, long, default_value_t = 5)]
+        interval_secs: u64,
+
+        /// Path to incoming statements directory for template studying
+        #[arg(long, default_value = "C:/bankfidelity/statements/incoming")]
+        incoming_dir: PathBuf,
+    },
 }
 
 /// Parses a bounding box string in the format "x0,y0,x1,y1".
@@ -2202,6 +2222,35 @@ pub fn run_inner(
                 }
                 _ => Ok(1),
             }
+        }
+        Commands::Daemon {
+            watchdog,
+            template_study,
+            interval_secs,
+            incoming_dir,
+        } => {
+            let rt = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("❌ Failed to start tokio runtime: {e}");
+                    return Ok(exit_code::GENERAL);
+                }
+            };
+
+            let cfg = crate::app::daemon::DaemonConfig {
+                watchdog_enabled: watchdog,
+                template_study_enabled: template_study,
+                interval_secs,
+                incoming_dir,
+                templates_db_path: PathBuf::from("C:/bankfidelity/data/templates.db"),
+            };
+
+            let daemon = crate::app::daemon::GuardianDaemon::new(cfg);
+            rt.block_on(daemon.run_forever());
+            Ok(exit_code::SUCCESS)
         }
     }
 }

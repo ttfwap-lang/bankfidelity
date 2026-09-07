@@ -21,6 +21,7 @@ pub mod categorization;
 pub mod consensus;
 pub mod financial_nlp;
 pub mod pro_edit;
+pub mod template_study;
 pub mod transfer;
 pub mod transfer_test_harness;
 pub mod typst_engine;

@@ -12,6 +12,7 @@ pub struct AiBackend {
     pub openrouter: Option<OpenAiClient>,
     pub groq: Option<OpenAiClient>,
     pub mistral: Option<OpenAiClient>,
+    pub mistral_native: Option<crate::ai::mistral_client::MistralClient>,
     pub gemini: Option<GeminiClient>,
 }
 
@@ -19,6 +20,8 @@ pub struct AiBackend {
 pub enum AiBackendError {
     #[error("OpenAI/OpenRouter Error: {0}")]
     OpenAi(#[from] OpenAiError),
+    #[error("Mistral Error: {0}")]
+    Mistral(#[from] crate::ai::mistral_client::MistralError),
     #[error("Gemini Error: {0}")]
     Gemini(#[from] GeminiError),
     #[error("No AI backends available or all failed. Last error: {0}")]
@@ -36,6 +39,7 @@ impl AiBackend {
         let mut openrouter = None;
         let mut groq = None;
         let mut mistral = None;
+        let mut mistral_native = None;
         let mut gemini = None;
 
         let mut or_cfg = cfg.clone();
@@ -56,6 +60,10 @@ impl AiBackend {
             mistral = Some(c);
         }
 
+        if let Ok(mc) = crate::ai::mistral_client::MistralClient::from_app_config(cfg) {
+            mistral_native = Some(mc);
+        }
+
         if let Ok(c) = GeminiClient::from_app_config(cfg) {
             gemini = Some(c);
         }
@@ -65,6 +73,7 @@ impl AiBackend {
             openrouter,
             groq,
             mistral,
+            mistral_native,
             gemini,
         })
     }
@@ -75,6 +84,7 @@ impl AiBackend {
             openrouter: None,
             groq: None,
             mistral: None,
+            mistral_native: None,
             gemini: None,
         }
     }
@@ -89,6 +99,7 @@ impl AiBackend {
         let mut openrouter = None;
         let mut groq = None;
         let mut mistral = None;
+        let mut mistral_native = None;
         let mut gemini = None;
 
         let mut or_cfg = cfg.clone();
@@ -109,6 +120,10 @@ impl AiBackend {
             mistral = Some(c);
         }
 
+        if let Ok(mc) = crate::ai::mistral_client::MistralClient::from_app_config_async(cfg).await {
+            mistral_native = Some(mc);
+        }
+
         if let Ok(c) = GeminiClient::from_app_config_async(cfg).await {
             gemini = Some(c);
         }
@@ -118,6 +133,7 @@ impl AiBackend {
             openrouter,
             groq,
             mistral,
+            mistral_native,
             gemini,
         })
     }
@@ -151,6 +167,19 @@ macro_rules! cascade {
 
         // 1. Try primary provider first
         match $self.primary {
+            AiProviderMode::MistralApiKey => {
+                if let Some(c) = &$self.mistral_native {
+                    match c.$method($($args),*).await {
+                        Ok(r) => return Ok(r),
+                        Err(e) => last_err = e.to_string(),
+                    }
+                } else if let Some(c) = &$self.mistral {
+                    match c.$method($($args),*).await {
+                        Ok(r) => return Ok(r),
+                        Err(e) => last_err = e.to_string(),
+                    }
+                }
+            }
             AiProviderMode::OpenRouterApiKey => {
                 if let Some(c) = &$self.openrouter {
                     match c.$method($($args),*).await {
@@ -167,33 +196,12 @@ macro_rules! cascade {
                     }
                 }
             }
-            AiProviderMode::MistralApiKey => {
-                if let Some(c) = &$self.mistral {
-                    match c.$method($($args),*).await {
-                        Ok(r) => return Ok(r),
-                        Err(e) => last_err = e.to_string(),
-                    }
-                }
-            }
-            AiProviderMode::GeminiApiKey | AiProviderMode::GeminiVertex => {
-                if let Some(c) = &$self.gemini {
-                    match c.$method($($args),*).await {
-                        Ok(r) => return Ok(r),
-                        Err(e) => last_err = e.to_string(),
-                    }
-                }
-            }
             _ => {}
         }
 
-        // 2. Cascade: OpenRouter -> Groq -> Mistral -> Gemini (optional last resort)
-        if let Some(c) = &$self.openrouter {
-            if $self.primary != AiProviderMode::OpenRouterApiKey {
-                if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
-            }
-        }
-        if let Some(c) = &$self.groq {
-            if $self.primary != AiProviderMode::GroqApiKey {
+        // 2. Cascade: Mistral (Specialist) -> OpenRouter / Groq (Zero Gemini)
+        if let Some(c) = &$self.mistral_native {
+            if $self.primary != AiProviderMode::MistralApiKey {
                 if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
             }
         }
@@ -202,8 +210,13 @@ macro_rules! cascade {
                 if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
             }
         }
-        if let Some(c) = &$self.gemini {
-            if !matches!($self.primary, AiProviderMode::GeminiApiKey | AiProviderMode::GeminiVertex) {
+        if let Some(c) = &$self.openrouter {
+            if $self.primary != AiProviderMode::OpenRouterApiKey {
+                if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
+            }
+        }
+        if let Some(c) = &$self.groq {
+            if $self.primary != AiProviderMode::GroqApiKey {
                 if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
             }
         }

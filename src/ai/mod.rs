@@ -15,4 +15,5 @@ pub mod python_worker;
 pub mod repair;
 pub mod vision;
 
+pub mod mistral_client;
 pub mod reducto;
