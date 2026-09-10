@@ -38,6 +38,7 @@ async fn test_chaos_malformed_json_repair() {
         openrouter: None,
         groq: None,
         mistral: None,
+        mistral_native: None,
     };
 
     use dual_core_pdf_pipeline::engine::model::{Provenance, Transaction};

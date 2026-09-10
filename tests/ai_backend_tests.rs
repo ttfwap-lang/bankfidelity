@@ -56,6 +56,7 @@ async fn test_ai_backend_cascade_success_on_primary() {
         server.url(),
         "groq-model".to_string(),
     ));
+    backend.mistral_native = None;
 
     let result = backend.verify_statement_mathematics("[]", 10.0).await;
 
@@ -112,11 +113,7 @@ async fn test_ai_backend_cascade_fallback() {
         "gemini-key".to_string(),
         server.url(),
     ));
-    backend.groq = Some(OpenAiClient::with_base_url(
-        "groq-key".to_string(),
-        server.url(),
-        "groq-model".to_string(),
-    ));
+    backend.mistral_native = None;
 
     let result = backend.verify_statement_mathematics("[]", 10.0).await;
 
@@ -163,11 +160,7 @@ async fn test_ai_backend_cascade_all_failed() {
         "gemini-key".to_string(),
         server.url(),
     ));
-    backend.groq = Some(OpenAiClient::with_base_url(
-        "groq-key".to_string(),
-        server.url(),
-        "groq-model".to_string(),
-    ));
+    backend.mistral_native = None;
 
     let result = backend.verify_statement_mathematics("[]", 10.0).await;
 

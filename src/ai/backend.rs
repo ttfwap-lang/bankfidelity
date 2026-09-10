@@ -196,10 +196,18 @@ macro_rules! cascade {
                     }
                 }
             }
+            AiProviderMode::GeminiApiKey => {
+                if let Some(c) = &$self.gemini {
+                    match c.$method($($args),*).await {
+                        Ok(r) => return Ok(r),
+                        Err(e) => last_err = e.to_string(),
+                    }
+                }
+            }
             _ => {}
         }
 
-        // 2. Cascade: Mistral (Specialist) -> OpenRouter / Groq (Zero Gemini)
+        // 2. Cascade: Mistral (Specialist) -> OpenRouter / Groq / Gemini
         if let Some(c) = &$self.mistral_native {
             if $self.primary != AiProviderMode::MistralApiKey {
                 if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
@@ -217,6 +225,11 @@ macro_rules! cascade {
         }
         if let Some(c) = &$self.groq {
             if $self.primary != AiProviderMode::GroqApiKey {
+                if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
+            }
+        }
+        if let Some(c) = &$self.gemini {
+            if $self.primary != AiProviderMode::GeminiApiKey {
                 if let Ok(r) = c.$method($($args),*).await { return Ok(r); }
             }
         }
