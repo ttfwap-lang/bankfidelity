@@ -109,7 +109,7 @@ impl Default for AppSettings {
             dark_mode: true,
             theme: Theme::ForensicDark,
             auto_save: true,
-            default_dpi: 300.0,
+            default_dpi: 600.0,
             auto_match_dpi: false,
             transfer_consensus_mode: true,
             use_pdfrest: false,

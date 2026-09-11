@@ -3,18 +3,18 @@
   "policy_id": "independent-verifier-v2",
   "renderer": {
     "engine": "pdfium",
-    "base_dpi": 300,
+    "base_dpi": 600,
     "edit_region_dpi": 600,
     "all_pages_required": true,
-    "adaptive_thresholds": false,
-    "adaptive_mask_padding": false
+    "adaptive_thresholds": true,
+    "adaptive_mask_padding": true
   },
   "thresholds": {
-    "outside_region_tile_max": 0.02,
-    "minimum_ssim": 0.4,
-    "maximum_edit_region_residual": 0.25,
+    "outside_region_tile_max": 0.005,
+    "minimum_ssim": 0.95,
+    "maximum_edit_region_residual": 0.05,
     "mask_padding_points": 0.0,
-    "tile_pixels": 24
+    "tile_pixels": 12
   },
   "mandatory_gates": [
     "structure.page_count",

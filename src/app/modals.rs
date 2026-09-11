@@ -338,11 +338,11 @@ impl AppModals for MyApp {
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Default DPI:");
-                                ui.add(egui::Slider::new(&mut self.settings.default_dpi, 72.0..=600.0).step_by(1.0))
-                                    .on_hover_text("Higher = sharper render, slower load");
+                                ui.add(egui::Slider::new(&mut self.settings.default_dpi, 72.0..=1200.0).step_by(1.0))
+                                    .on_hover_text("Higher = sharper render, slower load. 1200 DPI max for DGX Spark sub-pixel cascade.");
                             });
                             ui.checkbox(&mut self.settings.auto_match_dpi, "Auto-match DPI to PDF Document Size")
-                                .on_hover_text("Safely scales based on physical points (capped at 600 DPI to avoid OOM)");
+                                .on_hover_text("Safely scales based on physical points (capped at 1200 DPI for DGX Spark). Use mmap + CUDA batching at >600 DPI.");
                             ui.checkbox(&mut self.settings.transfer_consensus_mode, "Matrix Consensus for Transfers")
                                 .on_hover_text("Runs multiple AIs simultaneously to perform majority-vote extraction & math cross-referencing");
                             ui.checkbox(&mut self.settings.auto_save, "Auto-save history")
