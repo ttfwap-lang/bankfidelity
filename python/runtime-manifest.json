@@ -12,15 +12,15 @@
   "protocol_version": "1.0.0",
   "python": {
     "major": 3,
-    "minor": 15
+    "minor": 12
   },
   "schema_version": 1,
   "source_files": {
     "bridge_protocol.py": "377caafa8413ff543d5b96c26297e6d97fb37b97023af602737b04ec14e4057e",
     "font-resource-profiles.json": "51a17ed96607808f2ca988f3d07391f6b6f398d6bafe251f6a10331deabbdf3c",
-    "pymupdf_pro_integration.py": "b2c3bb518a3548fc1173037da17641623cd7d4b7a5702105bbd24540d3d0ad43",
+    "pymupdf_pro_integration.py": "5ee52ebfc6300a2829987df3987276163af33165e73ce50dc2088fc60374848b",
     "verify_runtime_manifest.py": "24d1fb61a520cf16538c6d65c852df28cf8976c8365464683508043e41b8cd1b",
     "verify_runtime_versions.py": "bbd3c8b67408e50f97086e236b0cf3ac14e87376f93f1f90cd2883561dadfe02",
-    "worker.py": "99ca77da6bcc391d0bba020522a07515b597d065da7a25955bde9c5193480e67"
+    "worker.py": "aceb9bf639f48153da13b94e30493297a931bd50f42b24f747644c19446d8488"
   }
 }

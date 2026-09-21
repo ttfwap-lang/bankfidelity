@@ -22,8 +22,9 @@ WORKER = ROOT / "python" / "worker.py"
 def pro_package_available() -> bool:
     try:
         importlib.metadata.version("PyMuPDFPro")
+        import pymupdf.pro  # noqa: F401
         return True
-    except importlib.metadata.PackageNotFoundError:
+    except Exception:
         return False
 
 

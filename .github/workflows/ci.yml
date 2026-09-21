@@ -306,8 +306,8 @@ jobs:
         with:
           toolchain: 1.89.0
       - name: Record dependency advisories
-        uses: rustsec/audit-check@v1.4.1
+        uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Record dependency policy findings
-        uses: EmbarkStudios/cargo-deny-action@v1
+        uses: EmbarkStudios/cargo-deny-action@v2

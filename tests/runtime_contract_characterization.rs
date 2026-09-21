@@ -38,8 +38,7 @@ use dual_core_pdf_pipeline::engine::transfer::TransferResult;
 use dual_core_pdf_pipeline::engine::transfer_test_harness::TestHarnessReport;
 use dual_core_pdf_pipeline::engine::verification::VerificationReport as EngineVerificationReport;
 use dual_core_pdf_pipeline::engine::workflow::{
-    BalancePreview, ParseValidation, VisualAttempt, WorkflowFailure, WorkflowOutcome,
-    WorkflowStage,
+    BalancePreview, ParseValidation, VisualAttempt, WorkflowFailure, WorkflowOutcome, WorkflowStage,
 };
 use rust_decimal::Decimal;
 use std::collections::BTreeSet;
@@ -298,9 +297,7 @@ fn pin_job(job: &Job) -> JobPin<'_> {
         Job::ExplainImbalance { .. } => (20, "explain_imbalance", false, SLOW, None),
         Job::Cancel { .. } => (21, "cancel", true, FAST, None),
         Job::SubmitBugReport { .. } => (22, "submit_bug_report", false, SLOW, None),
-        Job::TypstReconstruct { input, .. } => {
-            (23, "typst_reconstruct", false, SLOW, Some(input))
-        }
+        Job::TypstReconstruct { input, .. } => (23, "typst_reconstruct", false, SLOW, Some(input)),
         // NOTE: McpRenderPage has an `input` PDF but document_path() returns
         // None (falls into the `_` arm), so it gets no document_id.
         Job::McpRenderPage { .. } => (24, "mcp_render_page", false, SLOW, None),
@@ -336,9 +333,7 @@ fn pin_job(job: &Job) -> JobPin<'_> {
         Job::ListDocAiVersions => (39, "list_docai_versions", false, SLOW, None),
         Job::DeployDocAiVersion { .. } => (40, "deploy_docai_version", false, SLOW, None),
         Job::UndeployDocAiVersion { .. } => (41, "undeploy_docai_version", false, SLOW, None),
-        Job::SetDefaultDocAiVersion { .. } => {
-            (42, "set_default_docai_version", false, SLOW, None)
-        }
+        Job::SetDefaultDocAiVersion { .. } => (42, "set_default_docai_version", false, SLOW, None),
         Job::TrainDocAiVersion { .. } => (43, "train_docai_version", false, SLOW, None),
     };
     JobPin {
@@ -366,7 +361,11 @@ fn job_table_covers_every_variant_exactly_once() {
     let jobs = all_jobs();
     assert_eq!(jobs.len(), JOB_VARIANT_COUNT);
     let indices: BTreeSet<usize> = jobs.iter().map(|j| pin_job(j).idx).collect();
-    assert_eq!(indices.len(), JOB_VARIANT_COUNT, "duplicate/missing Job pin");
+    assert_eq!(
+        indices.len(),
+        JOB_VARIANT_COUNT,
+        "duplicate/missing Job pin"
+    );
     assert_eq!(
         indices,
         (0..JOB_VARIANT_COUNT).collect::<BTreeSet<_>>(),
@@ -427,10 +426,7 @@ fn job_default_timeout_and_document_path_pinned_via_ticket_metadata() {
         let meta = ticket.metadata();
 
         assert_eq!(meta.label, label, "metadata label, variant {pin_idx}");
-        assert_eq!(
-            meta.document_id, doc,
-            "document_path() drifted for {label}"
-        );
+        assert_eq!(meta.document_id, doc, "document_path() drifted for {label}");
         if doc.is_some() {
             seen_doc_ids += 1;
         }
