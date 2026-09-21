@@ -809,6 +809,7 @@ impl AppConfig {
             ocr: cfg!(feature = "ocr")
                 && std::path::Path::new("models/text-detection.rten").exists()
                 && std::path::Path::new("models/text-recognition.rten").exists(),
+            local_vlm: crate::ai::local_vlm::is_configured(),
         }
     }
 }
@@ -852,6 +853,10 @@ pub struct ApiAvailability {
     /// Local OCR is available: `ocr` Cargo feature enabled AND
     /// `models/text-detection.rten` + `models/text-recognition.rten` present.
     pub ocr: bool,
+    /// `LOCAL_VLM_URL` and `LOCAL_VLM_MODEL` are set (local vision-language
+    /// model, e.g. vLLM on a GX10). Additive evidence only; never a parser
+    /// of record.
+    pub local_vlm: bool,
 }
 
 impl ApiAvailability {
@@ -871,6 +876,7 @@ impl ApiAvailability {
             "document ai" | "document ai (vertex)" => self.document_ai = false,
             "vision ai" => self.vision_ai = false,
             "pdfrest" => self.pdfrest = false,
+            "local vlm" | "local_vlm" => self.local_vlm = false,
             _ => {}
         }
     }
@@ -916,6 +922,9 @@ impl ApiAvailability {
                     Some("OCR model files not found. Download text-detection.rten and text-recognition.rten into the models/ directory.")
                 }
             }
+            "local_vlm" if !self.local_vlm => {
+                Some("LOCAL_VLM_URL and LOCAL_VLM_MODEL not set. Point them at an OpenAI-compatible vision server (e.g. vLLM).")
+            }
             "mindee" if !self.mindee => {
                 Some("MINDEE_API_KEY not configured. Set it in Settings -> API Keys or .env.")
             }
@@ -940,6 +949,7 @@ impl ApiAvailability {
             pymupdf_pro = self.pymupdf_pro,
             vision_ai = self.vision_ai,
             ocr = self.ocr,
+            local_vlm = self.local_vlm,
             "[boot] API availability detected"
         );
     }

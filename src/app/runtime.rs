@@ -2215,10 +2215,11 @@ Additional Context:\n{context}",
             imbalance,
         } => {
             let client = crate::ai::local_llm::LocalLlmClient::new();
+            let model = client.model.clone();
             let result_tx = result_tx_clone.clone();
             tokio::spawn(async move {
                 let _ = result_tx.send(JobResult::Progress {
-                    label: "Asking local Qwen 7B to explain the math error...".into(),
+                    label: format!("Asking local model ({model}) to explain the math error..."),
                     fraction: 0.1,
                 });
                 match client
@@ -5236,11 +5237,11 @@ Additional Context:\n{context}",
                         }
                         // Step 2: LLM fallback for complex or ambiguous intents
                         if provider == "local-llm" {
+                            let client = crate::ai::local_llm::LocalLlmClient::new();
                             let _ = res_tx.send(JobResult::Progress {
-                                label: "Sending to Local LLM (Qwen 7B) for edit…".into(),
+                                label: format!("Sending to Local LLM ({}) for edit…", client.model),
                                 fraction: 0.4,
                             });
-                            let client = crate::ai::local_llm::LocalLlmClient::new();
                             match client.apply_natural_language_edit(&instruction, &txs).await {
                                 Ok(updated) => {
                                     let _ = res_tx.send(JobResult::Progress {

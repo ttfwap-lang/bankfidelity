@@ -1043,6 +1043,8 @@ pub mod pdfium_resolver {
             Ok("macos-x86_64")
         } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             Ok("linux-x86_64")
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            Ok("linux-aarch64")
         } else {
             Err(format!(
                 "no pinned Pdfium artifact for {}-{}",

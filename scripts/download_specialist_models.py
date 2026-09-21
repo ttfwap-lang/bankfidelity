@@ -1,72 +1,71 @@
 """
-BankFidelity SOTA Specialist Model Pre-Staging Script
-Zero Gemini | Zero DocAI | Zero Anthropic | Zero OpenAI | Zero Qwen | Zero DeepSeek
+BankFidelity specialist model pre-staging.
 
-Pre-downloads and stages:
-1. Microsoft Florence-2-Large (Vision Grounding & Sub-Pixel Coordinate Regression)
-2. Surya Layout & Reading Order (Line-level polygon segmentation)
-3. Microsoft Phi-3.5-Vision (4.2B local VLM watchdog weights)
+Stages optional specialist weights under $BF_MODELS_DIR (default: <repo>/models):
+  1. Microsoft Florence-2-Large (image grounding; opt-in via BF_SPECIALIST_FLORENCE=1)
+  2. Surya layout / reading order (opt-in via BF_SPECIALIST_SURYA=1)
+
+Large VLMs for the GX10 are NOT downloaded here: serve them with vLLM and point
+LOCAL_VLM_URL / LOCAL_VLM_MODEL at the server (see scripts/gx10/).
 """
+
+from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
 
-MODELS_ROOT = Path("C:/bankfidelity/models")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MODELS_ROOT = Path(os.environ.get("BF_MODELS_DIR") or REPO_ROOT / "models")
 
-def stage_florence2():
-    print("[1/3] Pre-staging Microsoft Florence-2-Large (Sub-Pixel Coordinate Regression)...")
+
+def stage_florence2() -> bool:
+    print("[1/2] Staging Florence-2-Large ...")
     dest = MODELS_ROOT / "florence2"
     dest.mkdir(parents=True, exist_ok=True)
     try:
         from transformers import AutoModelForCausalLM, AutoProcessor
+
         model_id = "microsoft/Florence-2-large"
-        print(f"      Downloading weights and tokenizer for {model_id} to {dest}...")
-        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True, cache_dir=str(dest))
-        model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True, cache_dir=str(dest))
-        print("      [OK] Florence-2-Large successfully staged.")
-    except Exception as e:
-        print(f"      [WARN] Florence-2 pre-download skipped or failed: {e}")
-        print("             (Can be downloaded on first run via specialist_bridge.py)")
+        AutoProcessor.from_pretrained(model_id, trust_remote_code=True, cache_dir=str(dest))
+        AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True, cache_dir=str(dest))
+    except (ImportError, OSError, ValueError, RuntimeError) as exc:
+        print(f"      [FAIL] {type(exc).__name__}: {exc}")
+        return False
+    print("      [OK]")
+    return True
 
-def stage_surya():
-    print("[2/3] Pre-staging Surya Layout & Reading Order Engine...")
-    dest = MODELS_ROOT / "surya"
-    dest.mkdir(parents=True, exist_ok=True)
+
+def stage_surya() -> bool:
+    print("[2/2] Staging Surya ordering weights ...")
+    (MODELS_ROOT / "surya").mkdir(parents=True, exist_ok=True)
     try:
-        from surya.model.ordering.processor import load_processor as load_order_processor
-        from surya.model.ordering.model import load_model as load_order_model
-        print("      Downloading Surya reading order weights...")
-        load_order_processor()
-        load_order_model()
-        print("      [OK] Surya layout weights successfully staged.")
-    except Exception as e:
-        print(f"      [WARN] Surya weights download skipped or deferred: {e}")
+        from surya.model.ordering.model import load_model
+        from surya.model.ordering.processor import load_processor
 
-def stage_phi35_vision():
-    print("[3/3] Pre-staging Microsoft Phi-3.5-Vision (Local 24/7 Watchdog VLM)...")
-    dest = MODELS_ROOT / "phi35_vision"
-    dest.mkdir(parents=True, exist_ok=True)
-    gguf_name = "Phi-3.5-vision-instruct-Q4_K_M.gguf"
-    target_path = dest / gguf_name
-    if target_path.exists():
-        print(f"      [OK] Found existing GGUF at {target_path} ({target_path.stat().st_size / (1024*1024):.1f} MB)")
-    else:
-        print(f"      Target GGUF location: {target_path}")
-        print("      Will be loaded into C:\\ufo\\bin\\llama-server.exe on port 8080.")
+        load_processor()
+        load_model()
+    except ImportError as exc:
+        print(f"      [FAIL] installed surya lacks the legacy ordering API: {exc}")
+        return False
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"      [FAIL] {type(exc).__name__}: {exc}")
+        return False
+    print("      [OK]")
+    return True
 
-def main():
-    print("=================================================================")
-    print(" BankFidelity 50GB+ Specialist Model Staging Pipeline            ")
-    print(f" Target Directory: {MODELS_ROOT}")
-    print("=================================================================")
+
+def main() -> int:
+    print(f"Model root: {MODELS_ROOT}")
     MODELS_ROOT.mkdir(parents=True, exist_ok=True)
-    stage_florence2()
-    stage_surya()
-    stage_phi35_vision()
-    print("=================================================================")
-    print(" [COMPLETE] Model staging routine finished.")
-    print("=================================================================")
+    results = {"florence2": stage_florence2(), "surya": stage_surya()}
+    failed = [name for name, ok in results.items() if not ok]
+    if failed:
+        print(f"[INCOMPLETE] failed: {', '.join(failed)}")
+        return 1
+    print("[COMPLETE]")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
