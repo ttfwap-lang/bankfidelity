@@ -17,9 +17,7 @@ pub use crate::error::{
 };
 
 pub use engine::balance::process_and_reconcile;
-pub use engine::font_metrics::ExactFontMetrics;
 pub use engine::verification::{verify_edit, VerificationReport};
-pub use engine::verification_v2::{EnhancedVerificationReport, VisualFidelityEngine};
 
 pub use engine::workflow::{
     WorkflowEvent, WorkflowFailure, WorkflowStage, WorkflowStateKind, WorkflowTransitionError,

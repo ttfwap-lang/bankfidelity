@@ -21,7 +21,7 @@ The **Bank Statement Fidelity Editor** is built on a high-performance Rust core 
 | Directory | Purpose | Key Files / Modules |
 | :--- | :--- | :--- |
 | **`src/app/`** | Application entry points, configuration, and runtime loop. | `cli.rs`, `gui.rs`, `runtime.rs`, `config.rs` |
-| **`src/engine/`** | Core business logic: balance math, verification gates, and layout. | `balance.rs`, `verification.rs`, `font_metrics.rs` |
+| **`src/engine/`** | Core business logic: balance math, verification gates, and layout. | `balance.rs`, `verification.rs` |
 | **`src/pdf/`** | PDF engine abstractions and the OxidizePdf fallback. | `mod.rs`, `oxidize.rs` |
 | **`src/ai/`** | Cloud provider clients and the supervised Python bridge. | `gemini_client.rs`, `python_worker.rs`, `pdfrest.rs` |
 | **`src/extractors/`** | Deterministic bank-specific templates and geometry heuristics. | `mod.rs`, `templates.rs` |

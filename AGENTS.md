@@ -15,7 +15,7 @@ if one appears.
 ## Project type
 
 Rust desktop/CLI project using Cargo (v2.0.0).
-Includes GUI (egui), CLI, Python bridge (PyO3), Node.js bridge (Applitools), PDF processing,
+Includes GUI (egui), CLI, Python bridge (supervised JSON-lines subprocess, `python/worker.py`; no `pyo3` dependency), Node.js bridge (Applitools), PDF processing,
 multi-backend AI integrations (Reducto, Document AI, LlamaParse, Gemini, Offline Heuristic), tests, scripts, and CI.
 
 ## Autonomy level
@@ -224,7 +224,7 @@ Every pipeline stage must have at least one offline fallback:
 - AI balance -> local balance engine
 - Cloud rendering -> local Pdfium
 - Visual AI -> SSIM-only metrics
-- PyMuPDF edit -> Pdfium -> Typst reconstruct (ultimate)
+- PyMuPDF edit -> Pdfium (Typst reconstruct is DISABLED for fidelity: `PdfEngineMode::is_fidelity_selectable` returns false for it, the job emits `typst_reconstruct_disabled`, and `modals.rs` force-migrates the setting away)
 
 **Exception**: `TransferTransactions` and `RunTransferTests` strictly require an AI provider (Groq/OpenRouter/Local Qwen) for layout-agnostic format mapping. Their source and target parsing stages fall back to `offline_parser`, but the actual translation mapping has no offline equivalent.
 

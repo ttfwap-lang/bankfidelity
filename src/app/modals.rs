@@ -395,8 +395,11 @@ impl AppModals for MyApp {
                             });
 
                             if ctx.input(|i| !i.raw.dropped_files.is_empty()) {
-                                // Dummy logic for now until native backend is wired
-                                self.toast(ToastKind::Success, "Custom font embedded successfully.");
+                                // Font embedding has no native backend yet; do not report success.
+                                self.toast(
+                                    ToastKind::Error,
+                                    "Custom font embedding is not yet available. Dropped fonts were ignored.",
+                                );
                             }
                         });
                 });

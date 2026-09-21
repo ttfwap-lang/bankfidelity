@@ -204,7 +204,7 @@ Same workspace, same constitution (repeated below — it binds you fully).
 - **Failure Recovery**: If local Qwen LLM is down, gracefully fallback to a manual-only notice without blocking the edit session or crashing the GUI.
 
 ### Phase B — Verification Gates & Evidence Ledger
-- **Target Files**: `src/engine/verification.rs`, `src/engine/verification_v2.rs`, `src/engine/verification_content.rs`, `src/engine/verification_structural.rs`, `src/app/api_verification.rs`, `src/app/audit.rs`.
+- **Target Files**: `src/engine/verification.rs`, `src/engine/verification_content.rs`, `src/engine/verification_structural.rs`, `src/app/api_verification.rs`, `src/app/audit.rs`.
 - **Implementation Details**:
   - Map all verification gates to the 8-gate evidence ledger (`src/app/audit.rs`).
   - Develop a tamper matrix inducing violations (altered amounts, dates, inserted/removed rows, font swaps, geometry shifts, metadata manipulation).

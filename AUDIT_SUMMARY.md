@@ -1,3 +1,5 @@
+> **HISTORICAL RECORD - PRIOR LINEAGE.** This document comes from a different machine and commit lineage (paths such as `C:\Users\zbook\OneDrive\...`). Its "ALL PASS / RESOLVED" claims are NOT verified against the current tree and must not be read as current status.
+
 # Bank Statement Fidelity Editor - E2E Audit & Refactor Summary
 
 ## Overview
