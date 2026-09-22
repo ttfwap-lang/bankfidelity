@@ -196,6 +196,14 @@ macro_rules! cascade {
                     }
                 }
             }
+            AiProviderMode::GeminiApiKey => {
+                if let Some(c) = &$self.gemini {
+                    match c.$method($($args),*).await {
+                        Ok(r) => return Ok(r),
+                        Err(e) => last_err = e.to_string(),
+                    }
+                }
+            }
             _ => {}
         }
 

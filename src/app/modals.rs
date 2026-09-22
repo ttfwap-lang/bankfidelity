@@ -1,7 +1,25 @@
 use crate::app::gui::{ActiveModal, MyApp, Theme, ToastKind};
 use crate::app::runtime::Job;
 use egui_plot::{Line, Plot};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Font file extensions the custom-font drop target in the settings modal
+/// advertises ("Drag and drop .ttf or .otf files here").
+const SUPPORTED_FONT_EXTENSIONS: [&str; 2] = ["ttf", "otf"];
+
+/// True when `path` has a font extension accepted by the custom-font drop
+/// target. Shared with the global document drop handlers in `gui.rs`, which
+/// must skip font files entirely so a drop that did not land on the target
+/// can never raise the font-upload error flow.
+pub fn is_supported_font_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            SUPPORTED_FONT_EXTENSIONS
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
+}
 
 fn capability_selectable_value<T: PartialEq>(
     ui: &mut egui::Ui,
@@ -394,7 +412,23 @@ impl AppModals for MyApp {
                                 });
                             });
 
-                            if ctx.input(|i| !i.raw.dropped_files.is_empty()) {
+                            // Font uploads are detected ONLY when the drop
+                            // lands on this target and only for supported
+                            // font files. Any other drop (e.g. a PDF over the
+                            // window, handled by the document-open path in
+                            // `gui.rs`) must not raise this font-specific
+                            // error.
+                            let font_drop_on_target = ctx.input(|i| {
+                                i.pointer
+                                    .hover_pos()
+                                    .is_some_and(|pos| response.rect.contains(pos))
+                                    && i.raw.dropped_files.iter().any(|file| {
+                                        file.path
+                                            .as_deref()
+                                            .is_some_and(is_supported_font_path)
+                                    })
+                            });
+                            if font_drop_on_target {
                                 // Font embedding has no native backend yet; do not report success.
                                 self.toast(
                                     ToastKind::Error,

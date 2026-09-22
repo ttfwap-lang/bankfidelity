@@ -1158,6 +1158,10 @@ pub enum JobResult {
     Pong,
     UfoAutoEditResult(serde_json::Value),
     UfoLog(String),
+    /// Useful payload of [`Job::ValidateCredentials`]: an intermediate
+    /// report, NOT a terminal result. Under the shared completion contract
+    /// the job sends this payload first and then closes with exactly one
+    /// terminal [`JobResult::JobCompleted`] (`validate_credentials`).
     ApiKeysVerified(crate::app::api_verification::VerificationReport),
     DocumentLoaded {
         layout_json: String,
@@ -1275,6 +1279,18 @@ pub enum JobResult {
     TransferTestsComplete(crate::engine::transfer_test_harness::TestHarnessReport),
 
     // ----- General Lifecycle -----------------------------------------------
+    /// The shared terminal completion every consumer (GUI in-flight slots,
+    /// `wait_for_terminal_result` / `wait_for_operation_completion` in the
+    /// CLI, `collect_results` in the HTTP server, routed [`JobTicket`]s and
+    /// the [`CancellationRegistry`]) keys off.
+    ///
+    /// Completion contract: a job emits its useful payloads first (e.g.
+    /// [`Self::ApiKeysVerified`] for [`Job::ValidateCredentials`]) and then
+    /// exactly one terminal result — this variant or an error /
+    /// cancellation variant — so every consumer observes the same end of
+    /// life. `Job::ValidateCredentials` and `Job::CleanupTempFiles` follow
+    /// this contract with the `validate_credentials` / `cleanup_temp_files`
+    /// labels.
     JobCompleted {
         job_label: String,
         disposition: OperationDisposition,
@@ -7457,16 +7473,21 @@ Additional Context:\n{context}",
             });
         }
         Job::CleanupTempFiles => {
+            let res_tx = result_tx_clone.clone();
             tokio::task::spawn_blocking(move || {
                 let now = std::time::SystemTime::now();
+                let mut removed = 0usize;
                 for dir in &["output", "audit"] {
                     if let Ok(entries) = std::fs::read_dir(dir) {
                         for entry in entries.flatten() {
                             if let Ok(meta) = entry.metadata() {
                                 if let Ok(modified) = meta.modified() {
                                     if let Ok(age) = now.duration_since(modified) {
-                                        if age.as_secs() > 86400 && meta.is_file() {
-                                            let _ = std::fs::remove_file(entry.path());
+                                        if age.as_secs() > 86400
+                                            && meta.is_file()
+                                            && std::fs::remove_file(entry.path()).is_ok()
+                                        {
+                                            removed += 1;
                                         }
                                     }
                                 }
@@ -7474,6 +7495,19 @@ Additional Context:\n{context}",
                         }
                     }
                 }
+                // Completion contract: after the useful work (the sweep) the
+                // job must close with exactly one terminal result, so routed
+                // `JobTicket` waiters, the `CancellationRegistry` drain, and
+                // the GUI/CLI/server consumers all observe the same end of
+                // life instead of hanging on a job that finishes silently.
+                let _ = res_tx.send(JobResult::completed(
+                    "cleanup_temp_files",
+                    OperationDisposition::Succeeded,
+                    None,
+                    format!(
+                        "Removed {removed} temporary file(s) older than 24h from output/ and audit/"
+                    ),
+                ));
             });
         }
         Job::Cancel { id } => {
@@ -7572,12 +7606,34 @@ Additional Context:\n{context}",
 
                 // We pass false for json_output because we just want the report returned
                 let report = crate::app::api_verification::verify_all_api_keys(&cfg, false).await;
+                let disposition = match report.exit_code() {
+                    0 => OperationDisposition::Succeeded,
+                    1 => OperationDisposition::Partial,
+                    _ => OperationDisposition::Failed,
+                };
+                let summary = format!(
+                    "Validated {} provider credential check(s): {:?}",
+                    report.results.len(),
+                    report.overall_status
+                );
+                // Useful payload first …
                 let _ = res_tx.send(JobResult::ApiKeysVerified(report));
 
                 let _ = res_tx.send(JobResult::Progress {
                     label: "Done".into(),
                     fraction: 1.0,
                 });
+
+                // … then exactly one terminal completion (shared contract):
+                // routed `JobTicket` waiters and the `CancellationRegistry`
+                // only release on this terminal, and every consumer maps the
+                // payload-driven disposition the same way.
+                let _ = res_tx.send(JobResult::completed(
+                    "validate_credentials",
+                    disposition,
+                    None,
+                    summary,
+                ));
             });
         }
         Job::BalanceAndApplyAll {

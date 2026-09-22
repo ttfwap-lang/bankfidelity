@@ -16,13 +16,22 @@
 //! `ResultSink` are crate-private. `document_path` and `default_timeout` are
 //! observed through the public `JobTicket::metadata()` (`document_id` /
 //! `deadline`). The tracker is observed end-to-end through a real `Runtime`.
+//!
+//! Completion contract: a job emits its useful payloads first and then
+//! exactly one terminal result. `Job::ValidateCredentials` and
+//! `Job::CleanupTempFiles` used to finish without any terminal result, which
+//! hung routed `JobTicket` waiters and leaked their `CancellationRegistry`
+//! entries until shutdown timed out; the corrected lifecycle (payload(s)
+//! first, then one terminal `JobCompleted`) is pinned end-to-end through a
+//! real `Runtime` below.
 
 use dual_core_pdf_pipeline::ai::document_ai::ProcessorVersionInfo;
 use dual_core_pdf_pipeline::app::api_verification::VerificationReport as ApiVerificationReport;
 use dual_core_pdf_pipeline::app::audit::AuditLog;
 use dual_core_pdf_pipeline::app::config::{AiProviderMode, AppConfig, DocumentParserMode};
 use dual_core_pdf_pipeline::app::runtime::{
-    CancellationRegistry, Job, JobResult, OperationDisposition, PythonJob, Runtime, RuntimeClient,
+    CancellationRegistry, Job, JobResult, JobTicket, OperationDisposition, PythonJob, Runtime,
+    RuntimeClient,
 };
 use dual_core_pdf_pipeline::app::watchdog::WatchdogEvent;
 use dual_core_pdf_pipeline::engine::ai_confirm::{AiConfirmation, AiConfirmationResponse};
@@ -684,6 +693,12 @@ fn pin_result(result: &JobResult) -> ResultPin {
             JobResult::Pong => (0, Some(Succeeded), true),
             JobResult::UfoAutoEditResult(_) => (1, Some(Succeeded), true),
             JobResult::UfoLog(_) => (2, None, false),
+            // NOTE: `ApiKeysVerified` is the useful payload of
+            // `Job::ValidateCredentials`, not a terminal: it keeps
+            // `disposition() == None` and does not free a GUI wait slot. The
+            // job closes with exactly one terminal
+            // `JobCompleted { job_label: "validate_credentials" }` after it,
+            // pinned by `validate_credentials_emits_payload_then_single_terminal_completion`.
             JobResult::ApiKeysVerified(_) => (3, None, false),
             JobResult::DocumentLoaded { .. } => (4, None, false),
             // NOTE: PageRendered ends the GUI wait but is NOT a terminal
@@ -865,6 +880,20 @@ fn cancellation_registry_request_cancel_all_retains_entries_but_cancel_all_drain
 // integration test without touching `src/`. They stay covered by the
 // in-module tests `terminal_tracker_*` in `src/app/runtime.rs`; the test below
 // pins the externally observable consequence: one terminal per job.
+//
+// NOTE: `Runtime::start` broadcasts the startup `Job::CleanupTempFiles`
+// terminal on this shared channel. It is background (not routed through a
+// `ResultSink`) and the CLI's `wait_for_terminal_result` skips it, so this
+// test skips it too when counting a tracked job's terminals.
+
+/// True when `result` is the startup `Job::CleanupTempFiles` terminal
+/// broadcast, which must not count against another job's terminal budget.
+fn is_background_cleanup_terminal(result: &JobResult) -> bool {
+    matches!(
+        result,
+        JobResult::JobCompleted { job_label, .. } if job_label == "cleanup_temp_files"
+    )
+}
 
 #[test]
 fn runtime_emits_exactly_one_terminal_result_per_tracked_job() {
@@ -888,6 +917,10 @@ fn runtime_emits_exactly_one_terminal_result_per_tracked_job() {
     let first_deadline = Instant::now() + Duration::from_secs(60);
     while terminals.is_empty() && Instant::now() < first_deadline {
         if let Ok(r) = job_rx.recv_timeout(Duration::from_millis(200)) {
+            // Skip the startup cleanup terminal (background, untracked).
+            if is_background_cleanup_terminal(&r) {
+                continue;
+            }
             if r.is_terminal() {
                 terminals.push(r);
             }
@@ -898,10 +931,152 @@ fn runtime_emits_exactly_one_terminal_result_per_tracked_job() {
     let grace = Instant::now() + Duration::from_secs(2);
     while Instant::now() < grace {
         if let Ok(r) = job_rx.recv_timeout(Duration::from_millis(100)) {
+            if is_background_cleanup_terminal(&r) {
+                continue;
+            }
             assert!(
                 !r.is_terminal(),
                 "second terminal emitted after the first: {r:?}"
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Corrected lifecycle: useful payload(s), then exactly one terminal
+// ---------------------------------------------------------------------------
+//
+// `Job::ValidateCredentials` and `Job::CleanupTempFiles` historically did
+// their useful work and finished without ever emitting a terminal result, so
+// routed `JobTicket` waiters hung and their `CancellationRegistry` entries
+// stayed registered until graceful shutdown timed out. The tests below pin
+// the corrected contract end-to-end through a real `Runtime`: payload(s)
+// first, then exactly one terminal `JobCompleted`, with no second terminal.
+
+/// Drain a routed ticket until its terminal result (or `timeout`).
+/// Returns `(non_terminal_payloads, terminal_results)`. After the first
+/// terminal a grace window runs so a duplicate/late terminal is caught.
+fn drain_routed_ticket(ticket: &JobTicket, timeout: Duration) -> (Vec<JobResult>, Vec<JobResult>) {
+    let deadline = Instant::now() + timeout;
+    let mut payloads = Vec::new();
+    let mut terminals = Vec::new();
+    while Instant::now() < deadline && terminals.is_empty() {
+        match ticket.recv_timeout(Duration::from_millis(200)) {
+            Ok(result) if result.is_terminal() => terminals.push(result),
+            Ok(result) => payloads.push(result),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let grace = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < grace {
+        match ticket.recv_timeout(Duration::from_millis(100)) {
+            Ok(result) => {
+                assert!(
+                    !result.is_terminal(),
+                    "second terminal emitted after the first: {result:?}"
+                );
+                payloads.push(result);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    (payloads, terminals)
+}
+
+#[test]
+fn cleanup_temp_files_emits_exactly_one_terminal_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let audit = AuditLog::open(dir.path()).unwrap();
+    let mut cfg_val = AppConfig::default();
+    cfg_val.passphrase = "contract-passphrase-1234567890".into();
+    cfg_val.log_dir = dir.path().join("logs");
+    let (_runtime, client, _broadcast_rx) = Runtime::start(audit, Arc::new(cfg_val));
+
+    let ticket = client.submit(Job::CleanupTempFiles).expect("submit");
+    assert_eq!(ticket.metadata().label, "cleanup_temp_files");
+
+    let (payloads, terminals) = drain_routed_ticket(&ticket, Duration::from_secs(60));
+    assert!(
+        payloads
+            .iter()
+            .all(|result| matches!(result, JobResult::Progress { .. })),
+        "cleanup must not emit intermediate payloads other than progress: {payloads:?}"
+    );
+    assert_eq!(
+        terminals.len(),
+        1,
+        "cleanup must emit exactly one terminal result, got: {terminals:?}"
+    );
+    let terminal = &terminals[0];
+    assert!(
+        matches!(
+            terminal,
+            JobResult::JobCompleted {
+                job_label,
+                disposition: OperationDisposition::Succeeded,
+                ..
+            } if job_label == "cleanup_temp_files"
+        ),
+        "expected a successful cleanup_temp_files JobCompleted, got: {terminal:?}"
+    );
+    // The terminal also frees the GUI wait slot (terminal ⊆ GUI-ending).
+    assert!(terminal.ends_gui_tracked_job());
+}
+
+#[test]
+fn validate_credentials_emits_payload_then_single_terminal_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let audit = AuditLog::open(dir.path()).unwrap();
+    let mut cfg_val = AppConfig::default();
+    cfg_val.passphrase = "contract-passphrase-1234567890".into();
+    cfg_val.log_dir = dir.path().join("logs");
+    let (_runtime, client, _broadcast_rx) = Runtime::start(audit, Arc::new(cfg_val));
+
+    let ticket = client.submit(Job::ValidateCredentials).expect("submit");
+    assert_eq!(ticket.metadata().label, "validate_credentials");
+
+    let (payloads, terminals) = drain_routed_ticket(&ticket, Duration::from_secs(120));
+
+    // The useful payload is delivered first …
+    let report = payloads
+        .iter()
+        .find_map(|result| match result {
+            JobResult::ApiKeysVerified(report) => Some(report),
+            _ => None,
+        })
+        .expect("ValidateCredentials must emit its ApiKeysVerified payload");
+    // … and is classified as intermediate: it landed in `payloads` (not
+    // `terminals`), so it neither ends the tracker lifecycle nor frees a GUI
+    // wait slot. Only the terminal below does.
+    let payload = JobResult::ApiKeysVerified(report.clone());
+    assert!(!payload.is_terminal());
+    assert!(!payload.ends_gui_tracked_job());
+
+    // Exactly one terminal …
+    assert_eq!(
+        terminals.len(),
+        1,
+        "validate_credentials must emit exactly one terminal result, got: {terminals:?}"
+    );
+    let terminal = &terminals[0];
+    let (job_label, disposition) = match terminal {
+        JobResult::JobCompleted {
+            job_label,
+            disposition,
+            ..
+        } => (job_label.as_str(), *disposition),
+        other => panic!("expected a JobCompleted terminal, got: {other:?}"),
+    };
+    assert_eq!(job_label, "validate_credentials");
+    // … whose disposition mirrors the report payload (payload-driven, exactly
+    // like the runtime's `report.exit_code()` mapping).
+    let expected = match report.exit_code() {
+        0 => OperationDisposition::Succeeded,
+        1 => OperationDisposition::Partial,
+        _ => OperationDisposition::Failed,
+    };
+    assert_eq!(disposition, expected, "disposition must mirror the payload");
+    assert!(terminal.ends_gui_tracked_job());
 }

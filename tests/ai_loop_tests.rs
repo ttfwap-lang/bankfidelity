@@ -39,6 +39,7 @@ async fn test_verify_and_repair_extraction_loop() {
         openrouter: None,
         groq: None,
         mistral: None,
+        mistral_native: None,
     };
 
     let stmt = BankStatement {

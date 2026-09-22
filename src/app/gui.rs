@@ -1349,6 +1349,12 @@ impl MyApp {
 
         // Drag-and-drop support: open the first dropped PDF and tell the
         // user about additional drops. Stage 13 / Item #8.
+        //
+        // This global path is document-only: it filters to `.pdf` paths and
+        // never participates in the font-upload flow. That flow lives in
+        // `modals.rs` and fires only when a drop lands on the custom-font
+        // target with a supported font extension, so opening a dropped PDF
+        // here can never raise the "custom font embedding" error.
         if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
             let dropped: Vec<PathBuf> = ctx.input(|i| {
                 i.raw
@@ -1449,6 +1455,18 @@ impl MyApp {
                             self.toast(
                                 ToastKind::Warn,
                                 "Folder batch UI is not included in v1. Use the `extract-batch` CLI command for bounded batch processing.",
+                            );
+                        } else if crate::app::modals::is_supported_font_path(path) {
+                            // Font files belong exclusively to the
+                            // custom-font drop target in `modals.rs`, which
+                            // raises the font-upload error only for drops
+                            // that land on that target. Outside it they are
+                            // ignored here, so this global document-open path
+                            // neither opens them as documents nor triggers
+                            // the font-upload error flow.
+                            tracing::debug!(
+                                "[gui] ignoring font drop outside the custom-font target: {:?}",
+                                path
                             );
                         } else if path.is_file()
                             && path

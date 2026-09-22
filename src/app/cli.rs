@@ -380,7 +380,17 @@ fn validate_pdf_path(path: &std::path::Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Blocking synchronous receiver helper
+/// Blocking synchronous receiver helper.
+///
+/// Completion contract shared with the GUI and the HTTP server: a job emits
+/// its useful payloads first (e.g. `ApiKeysVerified`, `PageRendered`) and
+/// then exactly one terminal result — an error/cancel variant, a payload
+/// terminal, or the `JobCompleted` now emitted by `validate_credentials` and
+/// `cleanup_temp_files`. This helper logs and skips payloads, skips the
+/// terminal completion of background lifecycle jobs the command did not
+/// dispatch (the runtime broadcasts its `cleanup_temp_files` sweep at
+/// startup), and returns the first result that answers the awaited command.
+///
 /// Drains progress beats and handles errors.
 fn wait_for_terminal_result(job_rx: &Receiver<JobResult>) -> Result<JobResult, (String, String)> {
     loop {
@@ -409,12 +419,23 @@ fn wait_for_terminal_result(job_rx: &Receiver<JobResult>) -> Result<JobResult, (
             Ok(JobResult::HistoryUpdated { .. }) => {
                 tracing::debug!("[cli] ignoring non-terminal HistoryUpdated");
             }
+            // Useful payload of `Job::ValidateCredentials`: intermediate under
+            // the shared completion contract. The job closes with exactly one
+            // terminal `JobCompleted { job_label: "validate_credentials" }`
+            // right after it, which is returned below as the command's answer.
             Ok(JobResult::ApiKeysVerified(_)) => {
                 tracing::debug!("[cli] ignoring non-terminal ApiKeysVerified");
             }
+            // Background lifecycle terminal the command did not dispatch: the
+            // runtime broadcasts a `cleanup_temp_files` completion at startup,
+            // so it must never be mistaken for the awaited result.
             Ok(JobResult::JobCompleted { job_label, .. }) if job_label == "cleanup_temp_files" => {
                 tracing::debug!("[cli] ignoring background cleanup_temp_files completion");
             }
+            // Any other `JobCompleted` is the shared terminal completion of a
+            // job this command is waiting on (e.g. `validate_credentials`,
+            // `adjust_dates`); surface it as the terminal answer.
+            Ok(result @ JobResult::JobCompleted { .. }) => return Ok(result),
             Ok(JobResult::Error { job_label, message }) => {
                 return Err((job_label, message));
             }
