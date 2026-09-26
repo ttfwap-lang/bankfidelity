@@ -148,7 +148,9 @@ class WorkerRuntime:
         try:
             self.runtime_manifest = verify_runtime_manifest("base")
         except BaseException as error:
-            print(f"Manifest verification failed (ignored): {error}", file=sys.stderr)
+            print(f"Manifest verification failed: {error}", file=sys.stderr)
+            self.bridge_error_class = type(error).__name__
+            return
             
         try:
             # stdout is the machine-readable JSON-lines transport. Optional Pro

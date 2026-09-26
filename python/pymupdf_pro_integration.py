@@ -1205,6 +1205,145 @@ def _type3_source_resource_plan(
     }
 
 
+def scan_content_stream_text_strings(stream: bytes):
+    """
+    Scans a PDF content stream byte-by-byte, accurately recognizing:
+    - Comments: % ... \r?\n (skipped)
+    - Inline images: BI ... ID <whitespace> <raw_image_data> \s+EI (skipped, never parsed as text)
+    - String literals: ( ... ) with balanced parentheses and backslash escapes (\\), \\(, \\\\, etc.)
+    - Hex strings: < ... > (not << dictionary)
+    - Font state updates: /<FontName> <FontSize> Tf
+
+    Yields:
+      {
+        'type': 'literal' or 'hex',
+        'inner_offset': start of payload in stream (after '(' or '<'),
+        'inner_len': length of payload,
+        'inner_bytes': bytes inside delimiters,
+        'token_start': start index of '(' or '<',
+        'token_end': end index after ')' or '>',
+        'font_alias': currently active font alias (e.g. 'F1'),
+        'font_size': currently active font size (float),
+        'operator': following text-showing operator (e.g. b'Tj', b'TJ', b"'", b'"')
+      }
+    """
+    pos = 0
+    n = len(stream)
+    active_font_alias = None
+    active_font_size = None
+
+    while pos < n:
+        b = stream[pos]
+        # Whitespace
+        if b in b" \t\r\n\x00\x0c":
+            pos += 1
+            continue
+        # Comment
+        if b == ord("%"):
+            newline = stream.find(b"\n", pos)
+            if newline < 0:
+                pos = n
+            else:
+                pos = newline + 1
+            continue
+        # Inline image BI ... ID ... EI
+        if stream[pos:pos+2] == b"BI" and (pos + 2 >= n or stream[pos+2] in b" \t\r\n\x00\x0c/[]<>"):
+            id_match = re.search(rb"\bID[\s\r\n]", stream[pos:])
+            if id_match:
+                data_start = pos + id_match.end()
+                ei_match = re.search(rb"[\s\r\n]EI(?=[\s\r\n/\[<({\x00-\x20]|\Z)", stream[data_start:])
+                if ei_match:
+                    pos = data_start + ei_match.end()
+                else:
+                    pos = n
+            else:
+                pos = n
+            continue
+        # Font operator /Alias Size Tf
+        if b == ord("/"):
+            tf_match = re.match(rb"/([A-Za-z0-9_.-]+)\s+([0-9.]+)\s+Tf\b", stream[pos:])
+            if tf_match:
+                active_font_alias = tf_match.group(1).decode("ascii", errors="replace")
+                active_font_size = float(tf_match.group(2))
+                pos += tf_match.end()
+                continue
+        # Literal string (...)
+        if b == ord("("):
+            token_start = pos
+            paren_depth = 1
+            p = pos + 1
+            while p < n and paren_depth > 0:
+                cb = stream[p]
+                if cb == ord("\\"):
+                    p += 2
+                elif cb == ord("("):
+                    paren_depth += 1
+                    p += 1
+                elif cb == ord(")"):
+                    paren_depth -= 1
+                    p += 1
+                else:
+                    p += 1
+            token_end = p
+            inner_offset = token_start + 1
+            inner_bytes = stream[inner_offset : token_end - 1] if token_end > token_start + 1 else b""
+
+            # Check following operator
+            op_p = token_end
+            while op_p < n and stream[op_p] in b" \t\r\n\x00\x0c":
+                op_p += 1
+            op_match = re.match(rb"([A-Za-z'\"*]+)", stream[op_p:])
+            op = op_match.group(1) if op_match else b""
+
+            yield {
+                "type": "literal",
+                "inner_offset": inner_offset,
+                "inner_len": len(inner_bytes),
+                "inner_bytes": inner_bytes,
+                "token_start": token_start,
+                "token_end": token_end,
+                "font_alias": active_font_alias,
+                "font_size": active_font_size,
+                "operator": op,
+            }
+            pos = token_end
+            continue
+        # Hex string <...>
+        if b == ord("<"):
+            if pos + 1 < n and stream[pos+1] == ord("<"):
+                pos += 2
+                continue
+            token_start = pos
+            end_bracket = stream.find(b">", pos + 1)
+            if end_bracket < 0:
+                pos = n
+                continue
+            token_end = end_bracket + 1
+            inner_offset = token_start + 1
+            inner_bytes = stream[inner_offset:end_bracket]
+
+            op_p = token_end
+            while op_p < n and stream[op_p] in b" \t\r\n\x00\x0c":
+                op_p += 1
+            op_match = re.match(rb"([A-Za-z'\"*]+)", stream[op_p:])
+            op = op_match.group(1) if op_match else b""
+
+            yield {
+                "type": "hex",
+                "inner_offset": inner_offset,
+                "inner_len": len(inner_bytes),
+                "inner_bytes": inner_bytes,
+                "token_start": token_start,
+                "token_end": token_end,
+                "font_alias": active_font_alias,
+                "font_size": active_font_size,
+                "operator": op,
+            }
+            pos = token_end
+            continue
+        pos += 1
+
+
 def _replace_type3_inplace(page, span: dict, rect_obj, plan: dict, old_text: str, new_text: str):
     old_codes = bytes.fromhex(str(plan.get("source_encoded_hex") or ""))
     new_codes = bytes.fromhex(str(plan.get("encoded_hex") or ""))
@@ -1238,23 +1377,29 @@ def _replace_type3_inplace(page, span: dict, rect_obj, plan: dict, old_text: str
 
     document = page.parent
     stream_matches = []
-    font_pattern = re.compile(rb"/([A-Za-z0-9_.-]+)\s+([0-9.]+)\s+Tf")
     for content_xref in page.get_contents():
         stream = document.xref_stream(int(content_xref)) or b""
-        start = 0
-        while True:
-            offset = stream.find(old_codes, start)
-            if offset < 0:
-                break
-            active_fonts = list(font_pattern.finditer(stream[:offset]))
-            if active_fonts and active_fonts[-1].group(1).decode("ascii") == alias:
-                stream_matches.append({
-                    "xref": int(content_xref),
-                    "offset": offset,
-                    "stream": stream,
-                    "font_size": float(active_fonts[-1].group(2)),
-                })
-            start = offset + 1
+        for token in scan_content_stream_text_strings(stream):
+            if token["font_alias"] == alias:
+                if token["type"] == "literal":
+                    idx = token["inner_bytes"].find(old_codes)
+                    if idx >= 0:
+                        stream_matches.append({
+                            "xref": int(content_xref),
+                            "offset": token["inner_offset"] + idx,
+                            "stream": stream,
+                            "font_size": float(token["font_size"] or 0.0),
+                        })
+                elif token["type"] == "hex":
+                    old_hex = old_codes.hex().encode("ascii")
+                    idx = token["inner_bytes"].lower().find(old_hex.lower())
+                    if idx >= 0:
+                        stream_matches.append({
+                            "xref": int(content_xref),
+                            "offset": token["inner_offset"] + idx,
+                            "stream": stream,
+                            "font_size": float(token["font_size"] or 0.0),
+                        })
     if len(stream_matches) != 1:
         raise ValueError(f"TYPE3_INPLACE_STREAM_MATCH_COUNT:{len(stream_matches)}")
 
@@ -1542,28 +1687,16 @@ def _one_byte_same_length_plan(page, span: dict, font_xref, old_text: str, new_t
             "ambiguous_chars": [],
             "reason": "one-byte source font does not cover the replacement",
         }
-    font_pattern = re.compile(rb"/([A-Za-z0-9_.-]+)\s+([0-9.]+)\s+Tf")
     matches = []
     literal_matches = []
     for content_xref in page.get_contents():
         stream = page.parent.xref_stream(int(content_xref)) or b""
-        start = 0
-        while True:
-            offset = stream.find(source_bytes, start)
-            if offset < 0:
-                break
-            active_fonts = list(font_pattern.finditer(stream[:offset]))
-            tail = offset + len(source_bytes)
-            literal = (
-                offset > 0
-                and stream[offset - 1:offset] == b"("
-                and stream[tail:tail + 3] == b")Tj"
-            )
-            if literal:
-                literal_matches.append((int(content_xref), offset))
-                if active_fonts and active_fonts[-1].group(1).decode("ascii") == resource_alias:
-                    matches.append((int(content_xref), offset))
-            start = offset + 1
+        for token in scan_content_stream_text_strings(stream):
+            if token["type"] == "literal" and token["inner_bytes"] == source_bytes:
+                if token["operator"] in (b"Tj", b"'", b"\""):
+                    literal_matches.append((int(content_xref), token["inner_offset"]))
+                    if token["font_alias"] == resource_alias:
+                        matches.append((int(content_xref), token["inner_offset"]))
     match_basis = "font-resource"
     if not matches:
         same_font_spans = []
@@ -1634,29 +1767,17 @@ def _replace_one_byte_same_length_inplace(page, plan: dict):
     alias = str(plan.get("resource_alias") or "")
     if not old_bytes or len(old_bytes) != len(new_bytes):
         raise ValueError("ONE_BYTE_INPLACE_LENGTH_MISMATCH")
-    font_pattern = re.compile(rb"/([A-Za-z0-9_.-]+)\s+([0-9.]+)\s+Tf")
     matches = []
     literal_matches = []
     document = page.parent
     for content_xref in page.get_contents():
         stream = document.xref_stream(int(content_xref)) or b""
-        start = 0
-        while True:
-            offset = stream.find(old_bytes, start)
-            if offset < 0:
-                break
-            active_fonts = list(font_pattern.finditer(stream[:offset]))
-            tail = offset + len(old_bytes)
-            literal = (
-                offset > 0
-                and stream[offset - 1:offset] == b"("
-                and stream[tail:tail + 3] == b")Tj"
-            )
-            if literal:
-                literal_matches.append((int(content_xref), offset, stream))
-                if active_fonts and active_fonts[-1].group(1).decode("ascii") == alias:
-                    matches.append((int(content_xref), offset, stream))
-            start = offset + 1
+        for token in scan_content_stream_text_strings(stream):
+            if token["type"] == "literal" and token["inner_bytes"] == old_bytes:
+                if token["operator"] in (b"Tj", b"'", b"\""):
+                    literal_matches.append((int(content_xref), token["inner_offset"], stream))
+                    if token["font_alias"] == alias:
+                        matches.append((int(content_xref), token["inner_offset"], stream))
     if not matches and plan.get("match_basis") == "geometry-ordinal-inherited-font-state":
         matches = literal_matches
     match_ordinal = int(plan.get("match_ordinal", 0))
@@ -1872,26 +1993,21 @@ def _profiled_type0_inplace_matches(page, plan: dict):
     alias = str(plan.get("resource_alias") or "")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", alias):
         return []
-    font_pattern = re.compile(rb"/([A-Za-z0-9_.-]+)\s+([0-9.]+)\s+Tf")
     matches = []
     document = page.parent
     for content_xref in page.get_contents():
         stream = document.xref_stream(int(content_xref)) or b""
-        searchable = stream.lower()
-        start = 0
-        while True:
-            offset = searchable.find(old_hex.lower(), start)
-            if offset < 0:
-                break
-            active_fonts = list(font_pattern.finditer(stream[:offset]))
-            if active_fonts and active_fonts[-1].group(1).decode("ascii") == alias:
-                matches.append((
-                    int(content_xref),
-                    offset,
-                    stream,
-                    float(active_fonts[-1].group(2)),
-                ))
-            start = offset + 1
+        for token in scan_content_stream_text_strings(stream):
+            if token["type"] == "hex" and token["font_alias"] == alias:
+                inner_hex = token["inner_bytes"]
+                idx = inner_hex.lower().find(old_hex.lower())
+                if idx >= 0:
+                    matches.append((
+                        int(content_xref),
+                        token["inner_offset"] + idx,
+                        stream,
+                        float(token["font_size"] or 0.0),
+                    ))
     return matches
 
 

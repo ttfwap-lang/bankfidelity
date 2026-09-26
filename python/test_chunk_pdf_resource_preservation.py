@@ -11,6 +11,7 @@ SPEC = importlib.util.spec_from_file_location("chunk_resource_bridge", MODULE_PA
 BRIDGE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(BRIDGE)
+BRIDGE._ensure_pro_unlocked = lambda *_args, **_kwargs: None
 
 
 class ChunkPdfResourcePreservationTests(unittest.TestCase):

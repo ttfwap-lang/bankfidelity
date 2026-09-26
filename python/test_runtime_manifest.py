@@ -67,6 +67,22 @@ class RuntimeManifestTests(unittest.TestCase):
         ):
             runtime_manifest.verify("base")
 
+    def test_worker_runtime_blocks_when_manifest_fails(self) -> None:
+        import sys
+        source_dir = Path(runtime_manifest.__file__).resolve().parent
+        if str(source_dir) not in sys.path:
+            sys.path.insert(0, str(source_dir))
+        from worker import WorkerRuntime
+
+        with mock.patch("worker.verify_runtime_manifest", side_effect=runtime_manifest.RuntimeManifestError("tampered")):
+            runtime = WorkerRuntime()
+            self.assertIsNone(runtime.bridge)
+            self.assertEqual(runtime.bridge_error_class, "RuntimeManifestError")
+            handshake = runtime.handshake()
+            self.assertFalse(handshake["ready"])
+            self.assertEqual(handshake["bridge_error_class"], "RuntimeManifestError")
+
 
 if __name__ == "__main__":
     unittest.main()
+

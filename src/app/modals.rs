@@ -1,26 +1,9 @@
-use crate::app::gui::{ActiveModal, MyApp, Theme, ToastKind};
+use crate::app::gui::state::{
+    is_supported_font_path, ActiveModal, AppModals, CommandPalette, MyApp, Theme, ToastKind,
+};
 use crate::app::runtime::Job;
 use egui_plot::{Line, Plot};
-use std::path::{Path, PathBuf};
-
-/// Font file extensions the custom-font drop target in the settings modal
-/// advertises ("Drag and drop .ttf or .otf files here").
-const SUPPORTED_FONT_EXTENSIONS: [&str; 2] = ["ttf", "otf"];
-
-/// True when `path` has a font extension accepted by the custom-font drop
-/// target. Shared with the global document drop handlers in `gui.rs`, which
-/// must skip font files entirely so a drop that did not land on the target
-/// can never raise the font-upload error flow.
-pub fn is_supported_font_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            SUPPORTED_FONT_EXTENSIONS
-                .iter()
-                .any(|supported| extension.eq_ignore_ascii_case(supported))
-        })
-}
-
+use std::path::PathBuf;
 fn capability_selectable_value<T: PartialEq>(
     ui: &mut egui::Ui,
     current: &mut T,
@@ -38,10 +21,6 @@ fn capability_selectable_value<T: PartialEq>(
     if !enabled {
         response.on_hover_text(reason);
     }
-}
-
-pub trait CommandPalette {
-    fn draw_command_palette(&mut self, ctx: &egui::Context);
 }
 
 impl CommandPalette for MyApp {
@@ -117,24 +96,6 @@ impl CommandPalette for MyApp {
             self.active_modal = ActiveModal::None;
         }
     }
-}
-
-#[allow(dead_code)]
-pub(crate) trait AppModals {
-    fn draw_settings_modal(&mut self, ctx: &egui::Context);
-    fn draw_backend_preferences(&mut self, ui: &mut egui::Ui);
-    fn draw_transfer_dialog(&mut self, ctx: &egui::Context);
-    fn draw_date_adjust_dialog(&mut self, ctx: &egui::Context);
-    fn draw_ai_confirmation_dialog(&mut self, ctx: &egui::Context);
-    fn draw_interactive_fallback_modal(&mut self, ctx: &egui::Context);
-    fn draw_autofix_modal(&mut self, ctx: &egui::Context);
-    fn draw_workflow_hitl_modal(&mut self, ctx: &egui::Context);
-    fn draw_transfer_test_dialog(&mut self, ctx: &egui::Context);
-    fn draw_api_keys_editor(&mut self, ui: &mut egui::Ui);
-    fn draw_feedback_modal(&mut self, ctx: &egui::Context);
-    fn draw_modals(&mut self, ctx: &egui::Context);
-    fn draw_stuck_watchdog_modal(&mut self, ctx: &egui::Context);
-    fn draw_discard_draft_confirm_modal(&mut self, ctx: &egui::Context);
 }
 
 impl AppModals for MyApp {
@@ -2127,13 +2088,13 @@ impl AppModals for MyApp {
         if force_fallback {
             self.in_flight = 0; // reset state to unlock UI
             self.toast(
-                crate::app::gui::ToastKind::Warn,
+                ToastKind::Warn,
                 "Watchdog triggered. Forcing fallback...".to_string(),
             );
             match &self.workflow_stage {
                 crate::engine::workflow::WorkflowStage::Parsing => {
                     self.toast(
-                        crate::app::gui::ToastKind::Info,
+                        ToastKind::Info,
                         "Falling back to Offline Parser...".to_string(),
                     );
                     if let Err(e) =
@@ -2150,7 +2111,7 @@ impl AppModals for MyApp {
                 }
                 crate::engine::workflow::WorkflowStage::Rendering { .. } => {
                     self.toast(
-                        crate::app::gui::ToastKind::Info,
+                        ToastKind::Info,
                         "Falling back to Native rendering...".to_string(),
                     );
                     self.dispatch_confirm_and_render(false, false);
